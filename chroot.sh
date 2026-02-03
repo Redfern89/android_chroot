@@ -15,6 +15,7 @@ is_mounted() {
     grep -q " $1 " /proc/mounts
 }
 
+# Знаю, по идиотски, но умнее лень было придумывать. Потенциально fragile
 mount_flags() {
     mount | grep "on $1 type" |  sed -n 's/.*(\(.*\)).*/\1/p'
 }
