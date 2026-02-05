@@ -60,14 +60,11 @@ get_term() {
                 current_pid=$(get_ppid $current_pid)
                 process_name=$(get_process_name $current_pid)
                 
-                # Если дошли до PID 1 (init) и ничего не нашли — выходим
                 if [ "$current_pid" -le 1 ]; then
                     term="unknown"
                 fi
             ;;
             *)
-                # Нашли что-то, что не входит в список выше (например, magiskd)
-                # Присваиваем term, и цикл while [ -z "$term" ] завершится
                 term="$process_name"
             ;;
         esac
@@ -75,6 +72,22 @@ get_term() {
     
     echo "$term"
 }
+
+get_rootfs_name() {
+    local release_file="$1/etc/os-release"
+    local version=""
+
+    if [ -f "$release_file" ]; then
+        version=$(. "$release_file" && echo "$PRETTY_NAME")
+    fi
+
+    if [ -z "$version" ]; then
+        version="Unknown"
+    fi
+
+    echo "$version"
+}
+
 
 log_print "i" "Running as: $(whoami)"
 
@@ -119,7 +132,6 @@ fi
 
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Terminal: $(get_term)"
-
 log_print "+" "Checking kernel features"
 
 # /proc/config.gz checking
@@ -204,7 +216,8 @@ log_print "+" "Mounting rootfs to ${ROOTFS_PATH}"
 mount -t ext4 "${LOOP_PATH}" "${ROOTFS_PATH}"
 
 if is_mounted "${ROOTFS_PATH}"; then
-    log_print "+" "RootFS mount done. (${ROOTFS_PATH})"  
+    #log_print "+" "RootFS mount done. (${ROOTFS_PATH})"
+    log_print "i" "RootFS: $(get_rootfs_name ${ROOTFS_PATH})"  
 else
     log_print "!" "RootFS mount fail. Aborted"
     exit 1
