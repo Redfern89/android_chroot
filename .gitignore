@@ -2,3 +2,4 @@
 *.ext3
 *.squashfs
 test.sh
+components/*
