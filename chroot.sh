@@ -36,6 +36,46 @@ check_kernel_feature() {
     fi
 }
 
+get_ppid() {
+    local pid=${1:-$PPID}
+    grep -i "PPid:" "/proc/$pid/status" | tr -cd '0-9'
+}
+
+get_process_name() {
+    if [ -f "/proc/${1:-$PPID}/comm" ]; then
+       cat "/proc/${1:-$PPID}/comm"
+    fi
+}
+
+get_term() {
+    term=""
+    # Начинаем с родителя текущего процесса
+    current_pid=$PPID
+    process_name=$(get_process_name $current_pid)
+
+    while [ -z "$term" ]; do
+        case "$process_name" in
+            zsh|bash|su|sh|screen|newgrp|sudo)
+                # Это оболочки, поднимаемся выше
+                current_pid=$(get_ppid $current_pid)
+                process_name=$(get_process_name $current_pid)
+                
+                # Если дошли до PID 1 (init) и ничего не нашли — выходим
+                if [ "$current_pid" -le 1 ]; then
+                    term="unknown"
+                fi
+            ;;
+            *)
+                # Нашли что-то, что не входит в список выше (например, magiskd)
+                # Присваиваем term, и цикл while [ -z "$term" ] завершится
+                term="$process_name"
+            ;;
+        esac
+    done
+    
+    echo "$term"
+}
+
 log_print "i" "Running as: $(whoami)"
 
 # Базовые проверки
@@ -72,10 +112,13 @@ USE_NS_KERNEL=false
 if command -v getprop > /dev/null 2>&1; then
     log_print "i" "Device: $(getprop ro.product.model)"
     log_print "i" "Vendor: $(getprop ro.product.manufacturer)"
+    log_print "i" "Android version: $(getprop ro.vendor.build.version.release)"
 else
     log_print "i" "Possibly running outside Android. Ignoring"
 fi
+
 log_print "i" "Kernel: $(uname -r)"
+log_print "i" "Terminal: $(get_term)"
 
 log_print "+" "Checking kernel features"
 
