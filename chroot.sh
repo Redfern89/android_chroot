@@ -217,7 +217,7 @@ mount -t ext4 "${LOOP_PATH}" "${ROOTFS_PATH}"
 
 if is_mounted "${ROOTFS_PATH}"; then
     #log_print "+" "RootFS mount done. (${ROOTFS_PATH})"
-    log_print "i" "RootFS: $(get_rootfs_name ${ROOTFS_PATH})"  
+    log_print "i" "OK. RootFS Version: $(get_rootfs_name ${ROOTFS_PATH})"  
 else
     log_print "!" "RootFS mount fail. Aborted"
     exit 1
