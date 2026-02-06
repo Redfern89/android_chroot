@@ -145,8 +145,10 @@ fi
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Terminal: $(get_term)"
 
+[ -z "${GZ_CMD}" ] && log_print "-" "GZIP Utils required to check kernel. Ignoring"
+
 # /proc/config.gz checking
-if [ -f "${KERNEL_CONFIG}" ] && [ ! -z "${GZ_CMD}" ]; then
+if [ -f "${KERNEL_CONFIG}" ] && [ -n "${GZ_CMD}" ]; then
     log_print "+" "Checking kernel features"
 
     if check_kernel_feature 'NAMESPACES'; then
@@ -181,15 +183,15 @@ if [ -f "${KERNEL_CONFIG}" ] && [ ! -z "${GZ_CMD}" ]; then
     if check_kernel_feature 'SECURITY_SELINUX'; then
         # Fucking SE Linux
         if command -v getenforce > /dev/null 2>&1; then
-            ENFORCE_STATE=$(getenforce | tr '[:upper:]' '[:lower:]')
+            selinux_state=$(getenforce | tr '[:upper:]' '[:lower:]')
             log_lvl="+"
             log_state="All is oaky"
-            if [ "${ENFORCE_STATE}" = "enforcing" ]; then
+            if [ "${selinux_state}" = "enforcing" ]; then
                 log_lvl="!"
                 log_state="There may be problems"
 
             fi
-            log_print "${log_lvl}" "SELinux in ${ENFORCE_STATE} state. ${log_state}"
+            log_print "${log_lvl}" "SELinux in ${selinux_state} state. ${log_state}"
         else
             log_print "-" "getenforce not available, ignoring"
         fi
@@ -304,7 +306,7 @@ fi
 
 # Монтирование дополнительных образов (если есть)
 if [ -d "${image_directory}" ]; then
-    for FILESYSTEM in squashfs ext4 ext3 ext2 xfs vxfs jffs2 f2f2 jfs dir; do
+    for FILESYSTEM in squashfs ext4 ext3 ext2 xfs vxfs jffs2 f2fs jfs dir; do
         for IMAGE in "${image_directory}"/*."${FILESYSTEM}"; do
             [ -e "$IMAGE" ] || continue 
             
