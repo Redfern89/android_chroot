@@ -138,7 +138,7 @@ log_print "i" "Terminal: $(get_term)"
 # /proc/config.gz checking
 if [ -f "${KERNEL_CONFIG}" ]; then
     log_print "+" "Checking kernel features"
-    
+
     if check_kernel_feature 'NAMESPACES'; then
         log_print "+" "This kernel uses a namespaces"
         USE_NS_KERNEL=true
@@ -326,7 +326,7 @@ umount -l "${ROOTFS_PATH}"
 if ! is_mounted "${ROOTFS_PATH}"; then
     rm -rf "${ROOTFS_PATH}"
     if [ ! -d  "${ROOTFS_PATH}" ]; then
-        log_print "+" "RootFS cleanup done"
+        log_print "+" "rm -rf ${ROOTFS_PATH} - OK"
     else
         log_print "!" "RootFS cleanup error"
     fi
