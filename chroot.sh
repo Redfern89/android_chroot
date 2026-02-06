@@ -28,10 +28,6 @@ check_mount_flag() {
     fi
 }
 
-check_kernel_feature() {
-    zcat "${KERNEL_CONFIG}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
-}
-
 get_ppid() {
     local pid=${1:-$PPID}
     grep -i "PPid:" "/proc/$pid/status" | tr -cd '0-9'
@@ -120,6 +116,23 @@ TMPFS_SIZE=500M
 USE_NS_KERNEL=false
 EXTERNAL_STORAGE_PARTS=""
 image_directory="${PWD}/components"
+GZ_CMD=""
+
+if command -v zcat > /dev/null 2>&1; then
+    GZ_CMD="zcat"
+else
+    if command -v gzip > /dev/null 2>&1; then
+        GZ_CMD="gzip -dc"
+    fi
+fi
+
+check_kernel_feature() {
+    if [ -n "${GZ_CMD}" ]; then
+        ${GZ_CMD} "${KERNEL_CONFIG}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
+    else
+        return 1
+    fi
+}
 
 if command -v getprop > /dev/null 2>&1; then
     log_print "i" "Device: $(getprop ro.product.model)"
@@ -133,7 +146,7 @@ log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Terminal: $(get_term)"
 
 # /proc/config.gz checking
-if [ -f "${KERNEL_CONFIG}" ]; then
+if [ -f "${KERNEL_CONFIG}" ] && [ ! -z "${GZ_CMD}" ]; then
     log_print "+" "Checking kernel features"
 
     if check_kernel_feature 'NAMESPACES'; then
