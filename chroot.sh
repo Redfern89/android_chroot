@@ -315,12 +315,13 @@ if [ -d "${image_directory}" ]; then
 
             mkdir -p "$target_mount"
             
-            if mount -t "${FILESYSTEM}" "$(realpath "$IMAGE")" "$target_mount" 2>/dev/null; then
+            if mount -o loop -t "${FILESYSTEM}" "$(realpath "$IMAGE")" "$target_mount" 2>/dev/null; then
                 log_print "+" "Mounting loopback: $base"
                 EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${target_mount}
 "
             else
                 log_print "!" "Failed to mount $base"
+                rm -rf "$target_mount"
             fi
         done
     done
@@ -347,7 +348,7 @@ fi
 
 echo "$EXTERNAL_STORAGE_PARTS" | while IFS= read -r m; do
     [ -z "$m" ] && continue
-    log_print "+" "Unmounting ${m}"
+    log_print "+" "Cleanup ${m}"
     umount "$m"
     if ! is_mounted "$m"; then
         rm -rf "$m"
@@ -357,7 +358,7 @@ done
 for umnt_path in $UMOUNT_DONE; do
     [ -d "${ROOTFS_PATH}/${umnt_path}" ] && umount -l "${ROOTFS_PATH}/${umnt_path}"
     if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
-        log_print "+" "Unmounting ${umnt_path}"
+        log_print "+" "Cleanup ${ROOTFS_PATH}/${umnt_path}"
     else
         log_print "!" "Error umounting: ${umnt_path}"
     fi
@@ -367,10 +368,12 @@ umount -l "${ROOTFS_PATH}"
 if ! is_mounted "${ROOTFS_PATH}"; then
     rm -rf "${ROOTFS_PATH}"
     if [ ! -d  "${ROOTFS_PATH}" ]; then
-        log_print "+" "Directory ${ROOTFS_PATH} removed"
+        log_print "+" "Cleanup ${ROOTFS_PATH}"
     else
         log_print "!" "RootFS cleanup error"
     fi
+else
+    log_print "!" "Error unmount RootFS"
 fi
 
 sleep 1
