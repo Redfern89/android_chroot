@@ -89,6 +89,15 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# Список необходимых утилит
+for util in mount umount losetup realpath dirname basename grep sed; do
+    if ! command -v "$util" > /dev/null 2>&1; then
+        log_print "!" "Required utility '$util' not found. Aborted"
+        exit 1
+    fi
+done
+
+
 # 1. Проверка аргумента
 if [ -z "$FILE" ]; then
     echo "Usage: $0 <path_to_file>"
