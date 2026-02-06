@@ -134,11 +134,11 @@ fi
 
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Terminal: $(get_term)"
-log_print "+" "Checking kernel features"
 
 # /proc/config.gz checking
 if [ -f "${KERNEL_CONFIG}" ]; then
-
+    log_print "+" "Checking kernel features"
+    
     if check_kernel_feature 'NAMESPACES'; then
         log_print "+" "This kernel uses a namespaces"
         USE_NS_KERNEL=true
@@ -218,7 +218,6 @@ log_print "+" "Mounting rootfs to ${ROOTFS_PATH}"
 mount -t ext4 "${LOOP_PATH}" "${ROOTFS_PATH}"
 
 if is_mounted "${ROOTFS_PATH}"; then
-    #log_print "+" "RootFS mount done. (${ROOTFS_PATH})"
     log_print "i" "OK. RootFS Version: $(get_rootfs_name ${ROOTFS_PATH})"  
 else
     log_print "!" "RootFS mount fail. Aborted"
