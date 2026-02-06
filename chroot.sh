@@ -115,12 +115,14 @@ LOCAL_DIR="/data/local"
 KERNEL_CONFIG="/proc/config.gz"
 BIND_FS_PATHS="dev sys proc"
 MASKING_BINDERS="binder hwbinder vndbinder"
+UMOUNT_DONE="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys poc dev"
 FILE_ABS=$(realpath "$FILE")
 DISTRO_NAME=$(echo "${FILE_ABS}" | sed 's/.*\///; s/\.[^.]*$//')
 ROOTFS_PATH="${LOCAL_DIR}/${DISTRO_NAME}"
 LOOP_PATH=$(losetup -j "${FILE_ABS}" | cut -d: -f1)
 TMPFS_SIZE=500M
 USE_NS_KERNEL=false
+EXTERNAL_STORAGE_PARTS=""
 
 if command -v getprop > /dev/null 2>&1; then
     log_print "i" "Device: $(getprop ro.product.model)"
@@ -254,12 +256,15 @@ if is_mounted "${ROOTFS_PATH}/tmp"; then
    log_print "+" "Mounted tmpfs as ${ROOTFS_PATH}/tmp (size=${TMPFS_SIZE})"
 fi
 
+#
+#  НАХУЙ!!! НЕ ИСПОЛЬЗОВАТЬ ЭТОТ КОД! ЛОМАЕТ ANDROID! ЭТО ВКЛЮЧАТЬ ОПАСНО!
+#
 # Checking internal /sdcard partition
-if [ -d "/storage/emulated/0" ]; then
-    log_print "+" "Found /sdcard partition, mounted to /mnt/sdcard"
-    mkdir -p "${ROOTFS_PATH}/mnt/sdcard"
-    mount -o bind /storage/emulated/0 "${ROOTFS_PATH}/mnt/sdcard"
-fi
+#if [ -d "/storage/emulated/0" ]; then
+#    log_print "+" "Found /sdcard partition, mounted to /mnt/sdcard"
+#    mkdir -p "${ROOTFS_PATH}/mnt/sdcard"
+#    mount -o bind /storage/emulated/0 "${ROOTFS_PATH}/mnt/sdcard"
+#fi
 
 # Checking external SD Card partitions
 if [ -d "/storage" ]; then
@@ -267,9 +272,13 @@ if [ -d "/storage" ]; then
         base=$(basename "${dir}")
         if [ "${base}" != "emulated" ] && [ "${base}" != "self" ]; then
             if [ -d "${dir}" ]; then
-                log_print "+" "Found external storage at ${dir}, mounted to ${ROOTFS_PATH}/mnt/${base}"
                 mkdir -p "${ROOTFS_PATH}/mnt/${base}"
                 mount -o bind "${dir}" "${ROOTFS_PATH}/mnt/${base}"
+                if is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
+                    EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${ROOTFS_PATH}/mnt/${base}
+"
+                    log_print "+" "Found external storage at ${dir}, mounted to ${ROOTFS_PATH}/mnt/${base}"
+                fi
             fi
         fi
     done
@@ -282,12 +291,7 @@ else
     chroot "${ROOTFS_PATH}" /bin/su -
 fi
 
-#################################################
-#                                               #
-#   Вот тут дальше идет не оптимизированный     #
-#   участок кода, нужно доделать все правильно  #
-#                                               #
-#################################################
+################ ЧИСТКА ТРУПОВ ################
 
 log_print "+" "killing all chroot tails"
 pids=$(lsof | grep "${ROOTFS_PATH}" | awk '{ print $2 }' | sort -u)
@@ -301,38 +305,33 @@ fi
 
 log_print "+" "Unmounting all"
 
-for dir in /storage/*; do
-    base=$(basename "${dir}")
-    if [ base != "emulated" ] && [ base != "self" ]; then
-        if [ -d "${dir}" ]; then
-            if is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
-                umount -l "${ROOTFS_PATH}/mnt/${base}" 2>/dev/null
-                rm -rf "${ROOTFS_PATH}/mnt/${base}"
-            fi
-        fi
+echo "$EXTERNAL_STORAGE_PARTS" | while IFS= read -r m; do
+    [ -z "$m" ] && continue
+    log_print "+" "Processing: ${m}"
+    umount "$m"
+    if ! is_mounted "$m"; then
+        rm -rf "$m"
     fi
 done
 
-if is_mounted "${ROOTFS_PATH}/mnt/sdcard"; then
-    umount -l "${ROOTFS_PATH}/mnt/sdcard" 2>/dev/null
-    rm -rf "${ROOTFS_PATH}/mnt/sdcard"
-fi
-
-umount -l "${ROOTFS_PATH}/dev/pts"
-
-for fs in $BIND_FS_PATHS; do
-    umount -l "${ROOTFS_PATH}/${fs}" 
+for umnt_path in $UMOUNT_DONE; do
+    [ -d "${ROOTFS_PATH}/${umnt_path}" ] && umount -l "${ROOTFS_PATH}/${umnt_path}"
+    if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
+        log_print "+" "Umounted ${umnt_path}"
+    else
+        log_print "!" "Error umounting: ${umnt_path}"
+    fi
 done
 
-for mask_fs in $MASKING_BINDERS; do
-    [ -d "${ROOTFS_PATH}/dev/${mask_fs}" ] && umount -l "${ROOTFS_PATH}/dev/${mask_fs}" 2>/dev/null
-done
-
-[ -d "${ROOTFS_PATH}/tmp" ] && umount -l "${ROOTFS_PATH}/tmp" 2>/dev/null
 umount -l "${ROOTFS_PATH}"
-
-log_print "+" "Syncing"
-sync
+if ! is_mounted "${ROOTFS_PATH}"; then
+    rm -rf "${ROOTFS_PATH}"
+    if [ ! -d  "${ROOTFS_PATH}" ]; then
+        log_print "+" "RootFS cleanup done"
+    else
+        log_print "!" "RootFS cleanup error"
+    fi
+fi
 
 sleep 1
 
@@ -340,6 +339,9 @@ log_print "+" "Removing loopback device ${LOOP_PATH}"
 if [ -b "${LOOP_PATH}" ]; then
     losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "!" "Loopback busy, will be cleared on reboot. Strange"
 fi
+
+log_print "+" "Syncing"
+sync
 
 log_print "+" "Done"
 echo "Return to shell\n\n"
