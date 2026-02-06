@@ -17,7 +17,7 @@ is_mounted() {
 
 # Знаю, по идиотски, но умнее лень было придумывать. Потенциально fragile
 mount_flags() {
-    mount | grep "on $1 type" |  sed -n 's/.*(\(.*\)).*/\1/p'
+    mount | grep " $1 " | sed 's/.*(\(.*\)).*/\1/' | head -n1
 }
 
 check_mount_flag() {
@@ -29,11 +29,7 @@ check_mount_flag() {
 }
 
 check_kernel_feature() {
-    if zcat "${KERNEL_CONFIG}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"; then
-        return 0
-    else
-        return 1
-    fi
+    zcat "${KERNEL_CONFIG}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
 }
 
 get_ppid() {
@@ -123,6 +119,7 @@ LOOP_PATH=$(losetup -j "${FILE_ABS}" | cut -d: -f1)
 TMPFS_SIZE=500M
 USE_NS_KERNEL=false
 EXTERNAL_STORAGE_PARTS=""
+image_directory="${PWD}/components"
 
 if command -v getprop > /dev/null 2>&1; then
     log_print "i" "Device: $(getprop ro.product.model)"
@@ -159,13 +156,22 @@ if [ -f "${KERNEL_CONFIG}" ]; then
         log_print "+" "ANDROID_PARANOID_NETWORK disabled. Network sockets workflow"
     fi
 
+    check_kernel_feature 'EXT2_FS' && log_print "+" "ext2 fileystem supported"
+    check_kernel_feature 'EXT3_FS' && log_print "+" "ext3 fileystem supported"
+    check_kernel_feature 'EXT4_FS' && log_print "+" "ext4 fileystem supported"
+    check_kernel_feature 'F2FS_FS' && log_print "+" "f2fs fileystem supported"
+    check_kernel_feature 'VXFS_FS' && log_print "+" "vxfs fileystem supported"
+    check_kernel_feature 'XFS_FS' && log_print "+" "xfs fileystem supported"
+    check_kernel_feature 'JFS_FS' && log_print "+" "jfs fileystem supported"
+    check_kernel_feature 'SQUASHFS' && log_print "+" "squashfs fileystem supported"
+
     if check_kernel_feature 'SECURITY_SELINUX'; then
         # Fucking SE Linux
         if command -v getenforce > /dev/null 2>&1; then
             ENFORCE_STATE=$(getenforce | tr '[:upper:]' '[:lower:]')
             log_lvl="+"
             log_state="All is oaky"
-            if [ "${ENFORCE_STATE}" == "enforcing" ]; then
+            if [ "${ENFORCE_STATE}" = "enforcing" ]; then
                 log_lvl="!"
                 log_state="There may be problems"
 
@@ -283,6 +289,28 @@ if [ -d "/storage" ]; then
     done
 fi
 
+# Монтирование дополнительных образов (если есть)
+if [ -d "${image_directory}" ]; then
+    for FILESYSTEM in squashfs ext4 ext3 ext2 xfs vxfs jffs2 f2f2 jfs dir; do
+        for IMAGE in "${image_directory}"/*."${FILESYSTEM}"; do
+            [ -e "$IMAGE" ] || continue 
+            
+            base=$(basename "${IMAGE}")
+            target_mount="${ROOTFS_PATH}/mnt/${base}"
+
+            mkdir -p "$target_mount"
+            
+            if mount -t "${FILESYSTEM}" "$(realpath "$IMAGE")" "$target_mount" 2>/dev/null; then
+                log_print "+" "Mounting loopback: $base"
+                EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${target_mount}
+"
+            else
+                log_print "!" "Failed to mount $base"
+            fi
+        done
+    done
+fi
+
 log_print "*" "Entering into chroot ${ROOTFS_PATH} as super user"
 if [ -e "${ROOTFS_PATH}/bin/sudo" ]; then
     chroot "${ROOTFS_PATH}" /bin/sudo su
@@ -302,11 +330,9 @@ if [ -n "${pids}" ]; then
     log_print "+" "Done"
 fi
 
-log_print "+" "Unmounting all"
-
 echo "$EXTERNAL_STORAGE_PARTS" | while IFS= read -r m; do
     [ -z "$m" ] && continue
-    log_print "+" "Processing: ${m}"
+    log_print "+" "Unmounting ${m}"
     umount "$m"
     if ! is_mounted "$m"; then
         rm -rf "$m"
@@ -316,7 +342,7 @@ done
 for umnt_path in $UMOUNT_DONE; do
     [ -d "${ROOTFS_PATH}/${umnt_path}" ] && umount -l "${ROOTFS_PATH}/${umnt_path}"
     if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
-        log_print "+" "Umounted ${umnt_path}"
+        log_print "+" "Unmounting ${umnt_path}"
     else
         log_print "!" "Error umounting: ${umnt_path}"
     fi
@@ -326,7 +352,7 @@ umount -l "${ROOTFS_PATH}"
 if ! is_mounted "${ROOTFS_PATH}"; then
     rm -rf "${ROOTFS_PATH}"
     if [ ! -d  "${ROOTFS_PATH}" ]; then
-        log_print "+" "rm -rf ${ROOTFS_PATH} - OK"
+        log_print "+" "Directory ${ROOTFS_PATH} removed"
     else
         log_print "!" "RootFS cleanup error"
     fi
@@ -334,7 +360,7 @@ fi
 
 sleep 1
 
-log_print "+" "Removing loopback device ${LOOP_PATH}"
+#log_print "+" "Removing loopback device ${LOOP_PATH}"
 if [ -b "${LOOP_PATH}" ]; then
     losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "!" "Loopback busy, will be cleared on reboot. Strange"
 fi
