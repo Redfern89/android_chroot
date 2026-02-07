@@ -127,16 +127,16 @@ EXTERNAL_STORAGE_PARTS=""
 IMAGE_DIRECTORY="${PWD}/components"
 KERNEL_CHECK_FEATURE_CMD=""
 
-if command -v zcat > /dev/null 2>&1; then
-    KERNEL_CHECK_FEATURE_CMD="zcat"
+if [ -d "/boot/config-$(uname -r) "]; then
+    KERNEL_CHECK_FEATURE_CMD="cat"
+    KERNEL_CONFIG="/boot/config-$(uname -r)"
 else
-    if command -v gzip > /dev/null 2>&1; then
-        KERNEL_CHECK_FEATURE_CMD="gzip -dc"
+    if command -v zcat > /dev/null 2>&1; then
+        KERNEL_CHECK_FEATURE_CMD="zcat"
+        KERNEL_CONFIG="/proc/config.gz"
     else
-        if [ -d "/boot/config-$(uname -r)" ]; then
-            KERNEL_CHECK_FEATURE_CMD="cat"
-            KERNEL_CONFIG="/boot/config-$(uname -r)"
-        fi
+        KERNEL_CHECK_FEATURE_CMD="gzip -dc"
+        KERNEL_CONFIG="/proc/config.gz"
     fi
 fi
 
