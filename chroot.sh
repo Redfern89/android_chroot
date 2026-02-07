@@ -162,7 +162,7 @@ log_print "i" "Terminal: $(get_term)"
 
 # /proc/config.gz (or /boot/config-<kernel-version>) checking
 if [ -f "${KERNEL_CONFIG}" ] && [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
-    log_print "+" "Checking kernel features (${KERNEL_CONFIG})"
+    log_print "+" "Checking kernel features (Using: ${KERNEL_CONFIG})"
 
     if check_kernel_feature 'NAMESPACES'; then
         log_print "+" "This kernel uses a namespaces"
