@@ -113,7 +113,7 @@ export TERM=xterm-256color
 
 # Параметры и переменные
 LOCAL_DIR="/data/local"
-KERNEL_CONFIG="/proc/config.gz"
+KERNEL_CONFIG_FILE=""
 BIND_FS_PATHS="dev sys proc"
 MASKING_BINDERS="binder hwbinder vndbinder"
 UMOUNT_DONE="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys poc dev"
@@ -129,9 +129,9 @@ KERNEL_CHECK_FEATURE_CMD=""
 
 if [ -f "/boot/config-$(uname -r)" ]; then
     KERNEL_CHECK_FEATURE_CMD="cat"
-    KERNEL_CONFIG="/boot/config-$(uname -r)"
+    KERNEL_CONFIG_FILE="/boot/config-$(uname -r)"
 elif [ -f "/proc/config.gz" ]; then
-    KERNEL_CONFIG="/proc/config.gz"
+    KERNEL_CONFIG_FILE="/proc/config.gz"
     if command -v zcat >/dev/null 2>&1; then
         KERNEL_CHECK_FEATURE_CMD="zcat"
     else
@@ -141,7 +141,7 @@ fi
 
 check_kernel_feature() {
     if [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
-        ${KERNEL_CHECK_FEATURE_CMD} "${KERNEL_CONFIG}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
+        ${KERNEL_CHECK_FEATURE_CMD} "${KERNEL_CONFIG_FILE}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
     else
         return 1
     fi
@@ -161,8 +161,8 @@ log_print "i" "Terminal: $(get_term)"
 [ -z "${KERNEL_CHECK_FEATURE_CMD}" ] && log_print "-" "GZIP Utils required to check kernel. Ignoring"
 
 # /proc/config.gz (or /boot/config-<kernel-version>) checking
-if [ -f "${KERNEL_CONFIG}" ] && [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
-    log_print "+" "Checking kernel features (Using: ${KERNEL_CONFIG})"
+if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
+    log_print "+" "Checking kernel features (Using: ${KERNEL_CONFIG_FILE})"
 
     if check_kernel_feature 'NAMESPACES'; then
         log_print "+" "This kernel uses a namespaces"
