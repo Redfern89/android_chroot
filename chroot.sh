@@ -131,12 +131,13 @@ if [ -d "/boot/config-$(uname -r) "]; then
     KERNEL_CHECK_FEATURE_CMD="cat"
     KERNEL_CONFIG="/boot/config-$(uname -r)"
 else
-    if command -v zcat > /dev/null 2>&1; then
-        KERNEL_CHECK_FEATURE_CMD="zcat"
+    if [ -f "/proc/config.gz" ]; then
         KERNEL_CONFIG="/proc/config.gz"
-    else
-        KERNEL_CHECK_FEATURE_CMD="gzip -dc"
-        KERNEL_CONFIG="/proc/config.gz"
+        if command -v zcat > /dev/null 2>&1; then
+            KERNEL_CHECK_FEATURE_CMD="zcat"    
+        else
+            KERNEL_CHECK_FEATURE_CMD="gzip -dc"
+        fi
     fi
 fi
 
