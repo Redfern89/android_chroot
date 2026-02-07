@@ -90,7 +90,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # Список необходимых утилит
-for util in mount umount losetup realpath dirname basename grep sed; do
+for util in mount umount losetup realpath dirname basename grep sed cat lsof; do
     if ! command -v "$util" > /dev/null 2>&1; then
         log_print "!" "Required utility '$util' not found. Aborted"
         exit 1
@@ -125,19 +125,24 @@ TMPFS_SIZE=500M
 USE_NS_KERNEL=false
 EXTERNAL_STORAGE_PARTS=""
 image_directory="${PWD}/components"
-GZ_CMD=""
+KERNEL_CHECK_FEATURE_CMD=""
 
 if command -v zcat > /dev/null 2>&1; then
-    GZ_CMD="zcat"
+    KERNEL_CHECK_FEATURE_CMD="zcat"
 else
     if command -v gzip > /dev/null 2>&1; then
-        GZ_CMD="gzip -dc"
+        KERNEL_CHECK_FEATURE_CMD="gzip -dc"
+    else
+        if [ -d "/boot/config-$(uname -r)" ]; then
+            KERNEL_CHECK_FEATURE_CMD="cat"
+            KERNEL_CONFIG="/boot/config-$(uname -r)"
+        fi
     fi
 fi
 
 check_kernel_feature() {
-    if [ -n "${GZ_CMD}" ]; then
-        ${GZ_CMD} "${KERNEL_CONFIG}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
+    if [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
+        ${KERNEL_CHECK_FEATURE_CMD} "${KERNEL_CONFIG}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
     else
         return 1
     fi
@@ -154,10 +159,10 @@ fi
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Terminal: $(get_term)"
 
-[ -z "${GZ_CMD}" ] && log_print "-" "GZIP Utils required to check kernel. Ignoring"
+[ -z "${KERNEL_CHECK_FEATURE_CMD}" ] && log_print "-" "GZIP Utils required to check kernel. Ignoring"
 
-# /proc/config.gz checking
-if [ -f "${KERNEL_CONFIG}" ] && [ -n "${GZ_CMD}" ]; then
+# /proc/config.gz (or /boot/config-<kernel-version>) checking
+if [ -f "${KERNEL_CONFIG}" ] && [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
     log_print "+" "Checking kernel features"
 
     if check_kernel_feature 'NAMESPACES'; then
