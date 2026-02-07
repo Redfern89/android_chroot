@@ -124,7 +124,7 @@ LOOP_PATH=$(losetup -j "${FILE_ABS}" | cut -d: -f1)
 TMPFS_SIZE=500M
 USE_NS_KERNEL=false
 EXTERNAL_STORAGE_PARTS=""
-image_directory="${PWD}/components"
+IMAGE_DIRECTORY="${PWD}/components"
 KERNEL_CHECK_FEATURE_CMD=""
 
 if command -v zcat > /dev/null 2>&1; then
@@ -319,9 +319,9 @@ if [ -d "/storage" ]; then
 fi
 
 # Монтирование дополнительных образов (если есть)
-if [ -d "${image_directory}" ]; then
+if [ -d "${IMAGE_DIRECTORY}" ]; then
     for FILESYSTEM in squashfs ext4 ext3 ext2 xfs vxfs jffs2 f2fs jfs dir; do
-        for IMAGE in "${image_directory}"/*."${FILESYSTEM}"; do
+        for IMAGE in "${IMAGE_DIRECTORY}"/*."${FILESYSTEM}"; do
             [ -e "$IMAGE" ] || continue 
             
             base=$(basename "${IMAGE}")
