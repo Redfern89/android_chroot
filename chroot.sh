@@ -33,6 +33,10 @@ log_print() {
     fi
 }
 
+get_loop_dev() {
+    losetup -j "$1" | head -n1 | cut -d: -f1
+}
+
 is_mounted() {
     grep -q " $1 " /proc/mounts
 }
@@ -256,6 +260,8 @@ else
 fi
 
 # 3. Работа с Loop-устройством
+LOOP_PATH=$(get_loop_dev "${FILE_ABS}")
+
 if [ -z "${LOOP_PATH}" ]; then
     log_print "+" "Creating loopback for ${FILE_ABS}"
     LOOP_PATH=$(losetup -f --show "${FILE_ABS}")
@@ -264,6 +270,8 @@ if [ -z "${LOOP_PATH}" ]; then
         log_print "!" "Failed to create loopback device. Aborted"
         exit 1
     fi
+else
+    log_print "+" "Found exists loopback device ${LOOP_PATH}"
 fi
 log_print "+" "Using device: ${LOOP_PATH}"
 
