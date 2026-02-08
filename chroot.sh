@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 
 FILE=$1
-PWD=$(dirname "$(realpath "$0")")
+PWD=$(cd "$(dirname "$0")" && pwd)
 
-if [ -f "${PWD}/banner" ]; then
-    cat "${PWD}/banner"
+if [ -f "${PWD}/banner.sh" ]; then
+    sh "${PWD}/banner.sh"
 fi
 
 # Список необходимых утилит
@@ -16,7 +16,21 @@ for util in mount umount losetup realpath dirname basename grep sed id lsof; do
 done
 
 log_print() {
-    echo "[${1}] $2"
+    color="\033[0m"
+
+    [ "$1" = "+" ] && color="\033[1;32m"
+    [ "$1" = "-" ] && color="\033[1;35m"
+    [ "$1" = "!" ] && color="\033[1;31m"
+    [ "$1" = "i" ] && color="\033[1;33m"
+    [ "$1" = "?" ] && color="\033[1;36m"
+    [ "$1" = "*" ] && color="\033[1;33m"
+    [ "$1" = "@" ] && color="\033[1;34m"
+    
+    if [ "$3" = true ]; then
+    	echo -n "${color}[${1}]\033[0m $2"
+    else
+        echo "${color}[${1}]\033[0m $2"
+    fi
 }
 
 is_mounted() {
@@ -33,6 +47,18 @@ check_mount_flag() {
         return 0
     else
         return 1
+    fi
+}
+
+get_coreutils() {
+    if command -v busybox > /dev/null 2>&1; then
+        busybox | head -n 1
+    elif command -v toybox > /dev/null 2>&1; then
+        toybox --version
+    elif command -v toolbox > /dev/null 2>&1; then
+        toolbox --version
+    else
+        echo "Unknown"
     fi
 }
 
@@ -88,7 +114,6 @@ get_rootfs_name() {
     echo "$version"
 }
 
-
 log_print "i" "Running as: $(whoami)"
 
 # Базовые проверки
@@ -114,13 +139,12 @@ export TERM=xterm-256color
 LOCAL_DIR="/data/local"
 KERNEL_CONFIG_FILE=""
 SHELLS="sh bash zsh"
-BIND_FS_PATHS="dev sys proc"
+BIND_FS_PATHS="dev dev/pts sys proc"
 MASKING_BINDERS="binder hwbinder vndbinder"
 CLEANUP_BINDERS="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys poc dev"
 FILE_ABS=$(realpath "$FILE")
-DISTRO_NAME=$(echo "${FILE_ABS}" | sed 's/.*\///; s/\.[^.]*$//')
-ROOTFS_PATH="${LOCAL_DIR}/${DISTRO_NAME}"
-LOOP_PATH=$(losetup -j "${FILE_ABS}" | cut -d: -f1)
+ROOTFS_PATH="${LOCAL_DIR}/$(basename ${FILE})"
+LOOP_PATH=""
 TMPFS_SIZE=500M
 USE_NS_KERNEL=false
 EXTERNAL_STORAGE_PARTS=""
@@ -133,11 +157,13 @@ if [ -f "/boot/config-$(uname -r)" ]; then
     KERNEL_CHECK_FEATURE_CMD="cat"
     KERNEL_CONFIG_FILE="/boot/config-$(uname -r)"
 elif [ -f "/proc/config.gz" ]; then
-    KERNEL_CONFIG_FILE="/proc/config.gz"
-    if command -v zcat >/dev/null 2>&1; then
-        KERNEL_CHECK_FEATURE_CMD="zcat"
-    else
-        KERNEL_CHECK_FEATURE_CMD="gzip -dc"
+    if [ -f "/proc/config.gz" ]; then
+        KERNEL_CONFIG_FILE="/proc/config.gz"
+        if command -v zcat >/dev/null 2>&1; then
+            KERNEL_CHECK_FEATURE_CMD="zcat"
+        else
+            KERNEL_CHECK_FEATURE_CMD="gzip -dc"
+        fi
     fi
 fi
 
@@ -149,15 +175,20 @@ check_kernel_feature() {
     fi
 }
 
+log_print "i" "Input file: $(basename $FILE), size=$(du -sh $FILE | cut -f1)"
+
 if command -v getprop > /dev/null 2>&1; then
-    log_print "i" "Device: $(getprop ro.product.model)"
+    log_print "i" "Device: $(getprop ro.product.model) ($(getprop ro.product.product.device))"
     log_print "i" "Vendor: $(getprop ro.product.manufacturer)"
     log_print "i" "Android version: $(getprop ro.vendor.build.version.release)"
 else
     log_print "i" "Possibly running outside Android. Ignoring"
 fi
 
+command -v magisk > /dev/null 2>&1 && log_print "i" "Magisk version: $(magisk -v)"
+
 log_print "i" "Kernel: $(uname -r)"
+log_print "i" "Utils: $(get_coreutils)"
 log_print "i" "Terminal: $(get_term)"
 
 [ -z "${KERNEL_CHECK_FEATURE_CMD}" ] && log_print "-" "GZIP Utils required to check kernel. Ignoring"
@@ -186,44 +217,31 @@ if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; the
         log_print "+" "ANDROID_PARANOID_NETWORK disabled. Network sockets workflow"
     fi
 
-    check_kernel_feature 'EXT2_FS' && log_print "+" "ext2 fileystem supported"
-    check_kernel_feature 'EXT3_FS' && log_print "+" "ext3 fileystem supported"
-    check_kernel_feature 'EXT4_FS' && log_print "+" "ext4 fileystem supported"
-    check_kernel_feature 'F2FS_FS' && log_print "+" "f2fs fileystem supported"
-    check_kernel_feature 'VXFS_FS' && log_print "+" "vxfs fileystem supported"
-    check_kernel_feature 'XFS_FS' && log_print "+" "xfs fileystem supported"
-    check_kernel_feature 'JFS_FS' && log_print "+" "jfs fileystem supported"
-    check_kernel_feature 'SQUASHFS' && log_print "+" "squashfs fileystem supported"
-
     if check_kernel_feature 'SECURITY_SELINUX'; then
         # Fucking SE Linux
         if command -v getenforce > /dev/null 2>&1; then
             selinux_state=$(getenforce | tr '[:upper:]' '[:lower:]')
             log_lvl="+"
             log_state="All is oaky"
+            color="\033[1;32m"
             if [ "${selinux_state}" = "enforcing" ]; then
                 log_lvl="!"
                 log_state="There may be problems"
-
+                color="\033[1;31m"
             fi
-            log_print "${log_lvl}" "SELinux in ${selinux_state} state. ${log_state}"
+            log_print "${log_lvl}" "SELinux in ${color}${selinux_state}\033[0m state. ${log_state}"
         else
             log_print "-" "getenforce not available, ignoring"
         fi
     fi
 else
-    log_print "!" "kernel configuration ${KERNEL_CONFIG} is not available. ignoring"
+    log_print "!" "kernel configuration is not available. ignoring"
 fi
 
 # 2. Базовые проверки
 if [ ! -d "${LOCAL_DIR}" ]; then
     log_print "!" "Directory ${LOCAL_DIR} not found. Aborted"
     exit 1
-fi
-
-if [ ! -d "${ROOTFS_PATH}" ]; then
-    log_print "+" "Creating directory ${ROOTFS_PATH}"
-    mkdir -p "${ROOTFS_PATH}"
 fi
 
 if is_mounted "/data"; then
@@ -250,11 +268,13 @@ fi
 log_print "+" "Using device: ${LOOP_PATH}"
 
 # 4. Монтирование основной FS
-log_print "+" "Mounting rootfs to ${ROOTFS_PATH}"
+#log_print "+" "Mounting rootfs to ${ROOTFS_PATH}"
+[ ! -d "${ROOTFS_PATH}" ] && mkdir -p "${ROOTFS_PATH}"
 mount -t ext4 "${LOOP_PATH}" "${ROOTFS_PATH}"
 
 if is_mounted "${ROOTFS_PATH}"; then
-    log_print "i" "OK. RootFS Version: $(get_rootfs_name ${ROOTFS_PATH})"  
+    log_print "+" "RootFS mounted to: ${ROOTFS_PATH}"
+    log_print "i" "Verison: $(get_rootfs_name ${ROOTFS_PATH})"  
 else
     log_print "!" "RootFS mount fail. Aborted"
     exit 1
@@ -263,27 +283,24 @@ fi
 log_print "+" "Begin to mount binded filesystems"
 
 # 5. Bind mount системных директорий
-for fs in $BIND_FS_PATHS; do
-    [ ! -d "${ROOTFS_PATH}/${fs}" ] && mkdir -p "${ROOTFS_PATH}/${fs}"
-    mount --bind "/${fs}" "${ROOTFS_PATH}/${fs}"
-    if is_mounted "${ROOTFS_PATH}/${fs}"; then
-        echo "   * ${fs}"
+for BIND_FS in $BIND_FS_PATHS; do
+    [ ! -d "${ROOTFS_PATH}/${BIND_FS}" ] && mkdir -p "${ROOTFS_PATH}/${BIND_FS}"
+    mount --bind "/${BIND_FS}" "${ROOTFS_PATH}/${BIND_FS}"
+    if is_mounted "${ROOTFS_PATH}/${BIND_FS}"; then
+        echo "    [${BIND_FS}]"
     fi
 done
 
 # Прячем биндеры от греха подальше
 log_print "+" "Masking HW binders"
 for mask_fs in $MASKING_BINDERS; do
-    mount -t tmpfs tmpfs ${ROOTFS_PATH}/dev/${mask_fs} 2>/dev/null
-    echo "   * ${mask_fs}"
+    if [ -e "/dev/${mask_fs}" ]; then 
+        mount -t tmpfs tmpfs ${ROOTFS_PATH}/dev/${mask_fs} 2>/dev/null
+        echo "    [${mask_fs}]"
+    else
+        log_print "-" "Binder ${mask_fs} not found, ignoring"
+    fi
 done
-
-# /dev/pts
-[ ! -d "${ROOTFS_PATH}/dev/pts" ] && mkdir -p "${ROOTFS_PATH}/dev/pts"
-mount -t devpts devpts "${ROOTFS_PATH}/dev/pts"
-if is_mounted "${ROOTFS_PATH}/dev/pts"; then
-   log_print "+" "Mounted pts as ${ROOTFS_PATH}/dev/pts"
-fi
 
 # tmpfs
 mount -t tmpfs -o size="${TMPFS_SIZE}" tmpfs "${ROOTFS_PATH}/tmp"
@@ -312,37 +329,13 @@ if [ -d "/storage" ]; then
                 if is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
                     EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${ROOTFS_PATH}/mnt/${base}
 "
-                    log_print "+" "Found external storage at ${dir}, mounted to ${ROOTFS_PATH}/mnt/${base}"
+                    log_print "+" "Found external storage at ${dir}, mounted to /mnt/${base}"
                 fi
             fi
         fi
     done
 fi
 
-# Монтирование дополнительных образов (если есть)
-if [ -d "${IMAGE_DIRECTORY}" ]; then
-    for FILESYSTEM in squashfs ext4 ext3 ext2 xfs vxfs jffs2 f2fs jfs dir; do
-        for IMAGE in "${IMAGE_DIRECTORY}"/*."${FILESYSTEM}"; do
-            [ -e "$IMAGE" ] || continue 
-            
-            base=$(basename "${IMAGE}")
-            target_mount="${ROOTFS_PATH}/mnt/${base}"
-
-            mkdir -p "$target_mount"
-            
-            if mount -o loop -t "${FILESYSTEM}" "$(realpath "$IMAGE")" "$target_mount" 2>/dev/null; then
-                log_print "+" "Mounting loopback: $base"
-                EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${target_mount}
-"
-            else
-                log_print "!" "Failed to mount $base"
-                rm -rf "$target_mount"
-            fi
-        done
-    done
-fi
-
-################ ЧИСТКА ТРУПОВ ################
 cleanup() {
     trap - EXIT INT TERM HUP
     
@@ -388,9 +381,9 @@ cleanup() {
 
     sleep 1
 
-    #log_print "+" "Removing loopback device ${LOOP_PATH}"
+    log_print "+" "Removing loopback device (${LOOP_PATH})"
     if [ -b "${LOOP_PATH}" ]; then
-        losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "!" "Loopback busy, will be cleared on reboot. Strange"
+        losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "!" "The loopback device is busy or removed before, may be cleared on reboot. Strange"
     fi
 
     log_print "+" "Syncing"
@@ -402,10 +395,9 @@ cleanup() {
     exit 0
 }
 
-################ Заряжаем ловушку на выход из скрипта ################
 trap cleanup INT TERM HUP EXIT
 
-log_print "+" "Searching shells in RootFS..."
+log_print "@" "Select shell to use"
 for shell in $SHELLS; do
     if [ -x "${ROOTFS_PATH}/bin/$shell" ]; then
         SHELL_PATH="/bin/$shell"
@@ -417,7 +409,7 @@ for shell in $SHELLS; do
     
     SHELL_COUNT=$((SHELL_COUNT + 1))
     FOUND_SHELLS="$FOUND_SHELLS $SHELL_PATH"
-    echo "      ${SHELL_COUNT}. $SHELL_PATH"
+    echo "    ${SHELL_COUNT}. $SHELL_PATH"
 done
 
 if [ "$SHELL_COUNT" -eq 0 ]; then
@@ -425,10 +417,35 @@ if [ "$SHELL_COUNT" -eq 0 ]; then
     SELECTED_SHELL="/bin/sh"
 elif [ "$SHELL_COUNT" -eq 1 ]; then
     SELECTED_SHELL=$(echo "$FOUND_SHELLS" | xargs)
-else
-    printf "[?] Choice (1-$SHELL_COUNT): "
-    read -r CHOICE
-    SELECTED_SHELL=$(echo "$FOUND_SHELLS" | cut -d' ' -f"$((CHOICE + 1))")
+else   
+    while true; do
+        #printf "[?] Choice (1-$SHELL_COUNT): "
+        log_print "?" "Choice (1-$SHELL_COUNT): " true
+        read -r CHOICE
+        
+        case "$CHOICE" in
+            *[!0-9]* | "")
+                #log_print "!" "Invalid argument: ${CHOICE}"
+                continue
+                ;;
+        esac
+        
+        SELECTED_SHELL=$(echo "$FOUND_SHELLS" | cut -d' ' -f"$((CHOICE + 1))")
+        
+        if [ ! -z "$SELECTED_SHELL" ] && [ -f "${ROOTFS_PATH}/${SELECTED_SHELL}" ]; then
+           log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL"
+           break
+        #else
+        #   log_print "!" "Invalid argument: ${CHOICE}"
+        fi
+    done
+    
+    if [ ! -z "$SELECTED_SHELL" ] && [ -x "${ROOTFS_PATH}/${SELECTED_SHELL}" ]; then
+        chroot "${ROOTFS_PATH}" "$SELECTED_SHELL"
+    else
+        log_print "!" "Failed to find shell. Aborted"
+        exit 1
+    fi
 fi
-log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL"
-chroot "${ROOTFS_PATH}" "$SELECTED_SHELL"
+
+################ ЧИСТКА ТРУПОВ ################
