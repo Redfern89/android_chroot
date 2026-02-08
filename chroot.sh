@@ -7,6 +7,14 @@ if [ -f "${PWD}/banner" ]; then
     cat "${PWD}/banner"
 fi
 
+# Список необходимых утилит
+for util in mount umount losetup realpath dirname basename grep sed id lsof; do
+    if ! command -v "$util" > /dev/null 2>&1; then
+        log_print "!" "Required utility '$util' not found. Aborted"
+        exit 1
+    fi
+done
+
 log_print() {
     echo "[${1}] $2"
 }
@@ -89,15 +97,6 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Список необходимых утилит
-for util in mount umount losetup realpath dirname basename grep sed cat lsof; do
-    if ! command -v "$util" > /dev/null 2>&1; then
-        log_print "!" "Required utility '$util' not found. Aborted"
-        exit 1
-    fi
-done
-
-
 # 1. Проверка аргумента
 if [ -z "$FILE" ]; then
     echo "Usage: $0 <path_to_file>"
@@ -105,7 +104,7 @@ if [ -z "$FILE" ]; then
 fi
 
 # Настройки окружения
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export USER=root
 export HOME=/root
 export HOST=fck-phone
@@ -114,9 +113,10 @@ export TERM=xterm-256color
 # Параметры и переменные
 LOCAL_DIR="/data/local"
 KERNEL_CONFIG_FILE=""
+SHELLS="sh bash zsh"
 BIND_FS_PATHS="dev sys proc"
 MASKING_BINDERS="binder hwbinder vndbinder"
-UMOUNT_DONE="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys poc dev"
+CLEANUP_BINDERS="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys poc dev"
 FILE_ABS=$(realpath "$FILE")
 DISTRO_NAME=$(echo "${FILE_ABS}" | sed 's/.*\///; s/\.[^.]*$//')
 ROOTFS_PATH="${LOCAL_DIR}/${DISTRO_NAME}"
@@ -126,6 +126,8 @@ USE_NS_KERNEL=false
 EXTERNAL_STORAGE_PARTS=""
 IMAGE_DIRECTORY="${PWD}/components"
 KERNEL_CHECK_FEATURE_CMD=""
+FOUND_SHELLS=""
+SHELL_COUNT=0
 
 if [ -f "/boot/config-$(uname -r)" ]; then
     KERNEL_CHECK_FEATURE_CMD="cat"
@@ -339,13 +341,43 @@ if [ -d "${IMAGE_DIRECTORY}" ]; then
         done
     done
 fi
+    
+log_print "+" "Searching shells..."
+for s in $SHELLS; do
+    if [ -x "${ROOTFS_PATH}/bin/$s" ]; then
+        SHELL_PATH="/bin/$s"
+    elif [ -x "${ROOTFS_PATH}/usr/bin/$s" ]; then
+        SHELL_PATH="/usr/bin/$s"
+    else
+        continue
+    fi
+    
+    SHELL_COUNT=$((SHELL_COUNT + 1))
+    FOUND_SHELLS="$FOUND_SHELLS $SHELL_PATH"
+    echo "      ${SHELL_COUNT}. $SHELL_PATH"
+done
 
-log_print "*" "Entering into chroot ${ROOTFS_PATH} as super user"
-if [ -e "${ROOTFS_PATH}/bin/sudo" ]; then
-    chroot "${ROOTFS_PATH}" /bin/sudo su
+if [ "$SHELL_COUNT" -eq 0 ]; then
+    log_print "!" "No shells found! Trying /bin/sh anyway..."
+    SELECTED_SHELL="/bin/sh"
+elif [ "$SHELL_COUNT" -eq 1 ]; then
+    SELECTED_SHELL=$(echo "$FOUND_SHELLS" | xargs)
 else
-    chroot "${ROOTFS_PATH}" /bin/su -
+    printf "[?] Choice (1-$SHELL_COUNT): "
+    read -r CHOICE
+    SELECTED_SHELL=$(echo "$FOUND_SHELLS" | cut -d' ' -f"$((CHOICE + 1))")
 fi
+
+log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL"
+chroot "${ROOTFS_PATH}" "$SELECTED_SHELL"
+
+
+#log_print "*" "Entering into chroot ${ROOTFS_PATH} as super user"
+#if [ -e "${ROOTFS_PATH}/bin/sudo" ]; then
+#    chroot "${ROOTFS_PATH}" /bin/sudo su
+#else
+#    chroot "${ROOTFS_PATH}" /bin/su -
+#fi
 
 ################ ЧИСТКА ТРУПОВ ################
 
@@ -368,7 +400,7 @@ echo "$EXTERNAL_STORAGE_PARTS" | while IFS= read -r m; do
     fi
 done
 
-for umnt_path in $UMOUNT_DONE; do
+for umnt_path in $CLEANUP_BINDERS; do
     [ -d "${ROOTFS_PATH}/${umnt_path}" ] && umount -l "${ROOTFS_PATH}/${umnt_path}"
     if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
         log_print "+" "Cleanup ${ROOTFS_PATH}/${umnt_path}"
