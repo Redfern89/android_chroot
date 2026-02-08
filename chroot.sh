@@ -341,13 +341,76 @@ if [ -d "${IMAGE_DIRECTORY}" ]; then
         done
     done
 fi
+
+################ ЧИСТКА ТРУПОВ ################
+cleanup() {
+    trap - EXIT INT TERM HUP
     
-log_print "+" "Searching shells..."
-for s in $SHELLS; do
-    if [ -x "${ROOTFS_PATH}/bin/$s" ]; then
-        SHELL_PATH="/bin/$s"
-    elif [ -x "${ROOTFS_PATH}/usr/bin/$s" ]; then
-        SHELL_PATH="/usr/bin/$s"
+    log_print "+" "killing all chroot tails"
+    pids=$(lsof | grep "${ROOTFS_PATH}" | awk '{ print $2 }' | sort -u)
+
+    if [ -n "${pids}" ]; then
+        log_print "i" "Killing pids: (${pids})"
+        kill -9 ${pids} 2>/dev/null
+        sleep 1
+        log_print "+" "Done"
+    fi
+
+    echo "$EXTERNAL_STORAGE_PARTS" | while IFS= read -r m; do
+        [ -z "$m" ] && continue
+        log_print "+" "Cleanup ${m}"
+        umount "$m"
+        if ! is_mounted "$m"; then
+            rm -rf "$m"
+        fi
+    done
+
+    for umnt_path in $CLEANUP_BINDERS; do
+        [ -d "${ROOTFS_PATH}/${umnt_path}" ] && umount -l "${ROOTFS_PATH}/${umnt_path}"
+        if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
+            log_print "+" "Cleanup ${ROOTFS_PATH}/${umnt_path}"
+        else
+            log_print "!" "Error umounting: ${umnt_path}"
+        fi
+    done
+
+    umount -l "${ROOTFS_PATH}"
+    if ! is_mounted "${ROOTFS_PATH}"; then
+        rm -rf "${ROOTFS_PATH}"
+        if [ ! -d  "${ROOTFS_PATH}" ]; then
+            log_print "+" "Cleanup ${ROOTFS_PATH}"
+        else
+            log_print "!" "RootFS cleanup error"
+        fi
+    else
+        log_print "!" "Error unmount RootFS"
+    fi
+
+    sleep 1
+
+    #log_print "+" "Removing loopback device ${LOOP_PATH}"
+    if [ -b "${LOOP_PATH}" ]; then
+        losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "!" "Loopback busy, will be cleared on reboot. Strange"
+    fi
+
+    log_print "+" "Syncing"
+    sync
+
+    log_print "+" "Done"
+    echo "Return to shell\n\n"
+
+    exit 0
+}
+
+################ Заряжаем ловушку на выход из скрипта ################
+trap cleanup INT TERM HUP EXIT
+
+log_print "+" "Searching shells in RootFS..."
+for shell in $SHELLS; do
+    if [ -x "${ROOTFS_PATH}/bin/$shell" ]; then
+        SHELL_PATH="/bin/$shell"
+    elif [ -x "${ROOTFS_PATH}/usr/bin/$shell" ]; then
+        SHELL_PATH="/usr/bin/$shell"
     else
         continue
     fi
@@ -367,69 +430,5 @@ else
     read -r CHOICE
     SELECTED_SHELL=$(echo "$FOUND_SHELLS" | cut -d' ' -f"$((CHOICE + 1))")
 fi
-
 log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL"
 chroot "${ROOTFS_PATH}" "$SELECTED_SHELL"
-
-
-#log_print "*" "Entering into chroot ${ROOTFS_PATH} as super user"
-#if [ -e "${ROOTFS_PATH}/bin/sudo" ]; then
-#    chroot "${ROOTFS_PATH}" /bin/sudo su
-#else
-#    chroot "${ROOTFS_PATH}" /bin/su -
-#fi
-
-################ ЧИСТКА ТРУПОВ ################
-
-log_print "+" "killing all chroot tails"
-pids=$(lsof | grep "${ROOTFS_PATH}" | awk '{ print $2 }' | sort -u)
-
-if [ -n "${pids}" ]; then
-    log_print "i" "Killing pids: (${pids})"
-    kill -9 ${pids} 2>/dev/null
-    sleep 1
-    log_print "+" "Done"
-fi
-
-echo "$EXTERNAL_STORAGE_PARTS" | while IFS= read -r m; do
-    [ -z "$m" ] && continue
-    log_print "+" "Cleanup ${m}"
-    umount "$m"
-    if ! is_mounted "$m"; then
-        rm -rf "$m"
-    fi
-done
-
-for umnt_path in $CLEANUP_BINDERS; do
-    [ -d "${ROOTFS_PATH}/${umnt_path}" ] && umount -l "${ROOTFS_PATH}/${umnt_path}"
-    if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
-        log_print "+" "Cleanup ${ROOTFS_PATH}/${umnt_path}"
-    else
-        log_print "!" "Error umounting: ${umnt_path}"
-    fi
-done
-
-umount -l "${ROOTFS_PATH}"
-if ! is_mounted "${ROOTFS_PATH}"; then
-    rm -rf "${ROOTFS_PATH}"
-    if [ ! -d  "${ROOTFS_PATH}" ]; then
-        log_print "+" "Cleanup ${ROOTFS_PATH}"
-    else
-        log_print "!" "RootFS cleanup error"
-    fi
-else
-    log_print "!" "Error unmount RootFS"
-fi
-
-sleep 1
-
-#log_print "+" "Removing loopback device ${LOOP_PATH}"
-if [ -b "${LOOP_PATH}" ]; then
-    losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "!" "Loopback busy, will be cleared on reboot. Strange"
-fi
-
-log_print "+" "Syncing"
-sync
-
-log_print "+" "Done"
-echo "Return to shell\n\n"
