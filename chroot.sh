@@ -46,7 +46,7 @@ LOCAL_DIR="/data/local"
 KERNEL_CONFIG_FILE=""
 SHELLS="sh bash zsh"
 BIND_FS_PATHS="dev dev/pts sys proc"
-MASKING_BINDERS="binder hwbinder vndbinder"
+HAL_BINDERS="binder hwbinder vndbinder"
 CLEANUP_BINDERS="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys poc dev"
 EXTERNAL_STORAGE_PARTS=""
 USE_LOOP_DEV=""
@@ -285,12 +285,12 @@ done
 
 # Прячем биндеры от греха подальше
 log_print "+" "Masking HAL binders"
-for mask_fs in $MASKING_BINDERS; do
-    if [ -e "/dev/${mask_fs}" ]; then 
-        mount -t tmpfs tmpfs ${ROOTFS_PATH}/dev/${mask_fs} 2>/dev/null
-        echo "    [${mask_fs}]"
+for MASKING_BINDER_FS in $HAL_BINDERS; do
+    if [ -e "/dev/${MASKING_BINDER_FS}" ]; then 
+        mount -t tmpfs tmpfs ${ROOTFS_PATH}/dev/${MASKING_BINDER_FS} 2>/dev/null
+        echo "    [${MASKING_BINDER_FS}]"
     else
-        log_print "-" "HAL Binder ${mask_fs} not found, ignoring"
+        log_print "-" "HAL Binder ${MASKING_BINDER_FS} not found, ignoring"
     fi
 done
 
@@ -392,8 +392,12 @@ for shell in $SHELLS; do
     fi
     
     SHELL_COUNT=$((SHELL_COUNT + 1))
+    if echo "$SHELL_PATH" | grep -q "su"; then
+        echo "    ${SHELL_COUNT}. \033[1;31m$SHELL_PATH\033[0m"
+    else
+        echo "    ${SHELL_COUNT}. $SHELL_PATH"
+    fi
     FOUND_SHELLS="$FOUND_SHELLS $SHELL_PATH"
-    echo "    ${SHELL_COUNT}. $SHELL_PATH"
 done
 
 if [ "$SHELL_COUNT" -eq 0 ]; then
