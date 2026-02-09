@@ -39,6 +39,7 @@ export USER=root
 export HOME=/root
 export HOST=fck-phone
 export TERM=xterm-256color
+export PS1="(chroot) ${PS1}"
 
 # Параметры и переменные
 TMPFS_SIZE=500M
@@ -57,6 +58,7 @@ ROOTFS_PATH=""
 SHELLS="sh bash zsh su"
 FOUND_SHELLS=""
 SHELL_COUNT=0
+IS_ANDROID="false"
 
 [ -f "$ROOTFS_FULL" ] && USE_LOOP_DEV="true"
 [ -d "$ROOTFS_FULL" ] && USE_LOOP_DEV="false"
@@ -179,12 +181,19 @@ get_cpu() {
 [ "${USE_LOOP_DEV}" = "true" ] && log_print "i" "Input file: ${ROOTFS_BASE}, size=$(du -sh ${ROOTFS_FULL} | cut -f1)"
 
 if command -v getprop > /dev/null 2>&1; then
+    IS_ANDROID="true"
     log_print "i" "Device: $(getprop ro.product.model) ($(getprop ro.product.product.device))"
     log_print "i" "Vendor: $(getprop ro.product.manufacturer)"
     log_print "i" "Android version: $(getprop ro.vendor.build.version.release)"
 else
     log_print "-" "Possibly running outside Android. Ignoring"
 fi
+
+if [ -f "${PWD}/android" ]; then
+    sh "${PWD}/android"
+fi
+
+exit 1
 
 command -v magisk > /dev/null 2>&1 && log_print "i" "Magisk version: $(magisk -v)"
 
@@ -193,6 +202,15 @@ log_print "i" "CPU: $(get_cpu)"
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Utils: $(get_coreutils)"
 log_print "i" "Terminal: $(get_term)"
+log_print "i" "Fetching shell colors"
+
+for i in $(seq 0 15); do
+    [ $i -lt 8 ] && color_code=$((40 + i)) || color_code=$((100 + i - 8))
+    echo -n "\033[${color_code}m   \033[0m"
+    [ $i -eq 7 ] && echo ""
+done
+
+echo ""
 
 if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ ! -z "${KERNEL_CHECK_FEATURE_CMD}" ]; then
     log_print "+" "Checking kernel features (Using: ${KERNEL_CONFIG_FILE})"
@@ -210,10 +228,12 @@ if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ ! -z "${KERNEL_CHECK_FEATURE_CMD}" ]; t
         log_print "+" "Loopback block devices supported."
     fi
 
-    if check_kernel_feature 'ANDROID_PARANOID_NETWORK'; then
-        log_print "-" "ANDROID_PARANOID_NETWORK enabled. Network is stuck"
-    else
-        log_print "+" "ANDROID_PARANOID_NETWORK disabled. Network sockets workflow"
+    if [ "${IS_ANDROID}" = "true" ]; then
+        if check_kernel_feature 'ANDROID_PARANOID_NETWORK'; then
+            log_print "-" "ANDROID_PARANOID_NETWORK enabled. Network is stuck"
+        else
+            log_print "+" "ANDROID_PARANOID_NETWORK disabled. Network sockets workflow"
+        fi
     fi
 
     if check_kernel_feature 'SECURITY_SELINUX'; then
