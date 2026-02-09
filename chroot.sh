@@ -8,7 +8,6 @@ if [ -f "${PWD}/banner.sh" ]; then
     sh "${PWD}/banner.sh"
 fi
 
-
 log_print() {
     color="\033[0m"
 
@@ -165,6 +164,14 @@ get_rootfs_name() {
     echo "$version"
 }
 
+get_cpu() {
+    if [ -f "/proc/cpuinfo" ]; then
+       awk -F '\\s*: | @' \
+            '/model name|Hardware|Processor|^cpu model|chip type|^cpu type/ {
+            cpu=$2; if ($1 == "Hardware") exit } END { print cpu }' "/proc/cpuinfo"
+    fi
+}
+
 [ "${USE_LOOP_DEV}" = "true" ] && log_print "i" "Input file: ${ROOTFS_BASE}, size=$(du -sh ${ROOTFS_FULL} | cut -f1)"
 
 if command -v getprop > /dev/null 2>&1; then
@@ -178,6 +185,7 @@ fi
 command -v magisk > /dev/null 2>&1 && log_print "i" "Magisk version: $(magisk -v)"
 
 log_print "i" "Arch: $(uname -m)"
+log_print "i" "CPU: $(get_cpu)"
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Utils: $(get_coreutils)"
 log_print "i" "Terminal: $(get_term)"
