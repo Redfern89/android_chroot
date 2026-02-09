@@ -101,19 +101,6 @@ is_mounted() {
     grep -q " $1 " /proc/mounts
 }
 
-# Знаю, по идиотски, но умнее лень было придумывать. Потенциально fragile
-mount_flags() {
-    mount | grep " $1 " | sed 's/.*(\(.*\)).*/\1/' | head -n1
-}
-
-check_mount_flag() {
-    if mount_flags "$1" | grep -q "$2"; then
-        return 0
-    else
-        return 1
-    fi
-}
-
 get_coreutils() {
     if command -v busybox > /dev/null 2>&1; then
         busybox | head -n 1
@@ -190,6 +177,7 @@ fi
 
 command -v magisk > /dev/null 2>&1 && log_print "i" "Magisk version: $(magisk -v)"
 
+log_print "i" "Arch: $(uname -m)"
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Utils: $(get_coreutils)"
 log_print "i" "Terminal: $(get_term)"
@@ -281,7 +269,7 @@ for BIND_FS in $BIND_FS_PATHS; do
             echo "    [${BIND_FS}]"
         fi
     else
-        log_print "-" "${BIND_FS} is mounted before. Skipping"
+        log_print "-" "${BIND_FS} was mounted before. Fucking strange. Skipping"
     fi
 done
 
