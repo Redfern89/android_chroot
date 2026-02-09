@@ -157,6 +157,19 @@ KERNEL_CHECK_FEATURE_CMD=""
 FOUND_SHELLS=""
 SHELL_COUNT=0
 
+case "${FILE_ABS}" in
+    "")
+        USE_LOOP="false"
+        ;;
+    *)
+        if [ -f "${FILE_ABS}" ]; then
+            USE_LOOP="true"
+        elif [ -d "${FILE_ABS}" ]; then
+            USE_LOOP="false"
+        fi
+        ;;
+esac
+
 if [ -f "/boot/config-$(uname -r)" ]; then
     KERNEL_CHECK_FEATURE_CMD="cat"
     KERNEL_CONFIG_FILE="/boot/config-$(uname -r)"
@@ -179,7 +192,7 @@ check_kernel_feature() {
     fi
 }
 
-log_print "i" "Input file: $(basename $FILE), size=$(du -sh $FILE | cut -f1)"
+[ "$USE_LOOP" = "false" ] || log_print "i" "Input file: $(basename $FILE), size=$(du -sh $FILE_ABS | cut -f1)"
 
 if command -v getprop > /dev/null 2>&1; then
     log_print "i" "Device: $(getprop ro.product.model) ($(getprop ro.product.product.device))"
@@ -191,6 +204,7 @@ fi
 
 command -v magisk > /dev/null 2>&1 && log_print "i" "Magisk version: $(magisk -v)"
 
+log_print "i" "Arch: $(uname -m)"
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Utils: $(get_coreutils)"
 log_print "i" "Terminal: $(get_term)"
@@ -243,51 +257,54 @@ else
 fi
 
 # 2. Базовые проверки
-if [ ! -d "${LOCAL_DIR}" ]; then
+if [ ! -d "${LOCAL_DIR}" ] && [ "${USE_LOOP}" = "true" ]; then
     log_print "!" "Directory ${LOCAL_DIR} not found. Aborted"
     exit 1
 fi
 
-if is_mounted "/data"; then
-    if check_mount_flag "/data" "nosuid"; then
-        mount -o remount,dev,suid /data
-        log_print "+" "/data remounted with fix FUCKING setuid issue"
+if [ "${USE_LOOP}" = "true" ]; then
+    if is_mounted "/data"; then
+        if check_mount_flag "/data" "nosuid"; then
+            mount -o remount,dev,suid /data
+            log_print "+" "/data remounted with fix FUCKING setuid issue"
+        else
+            log_print "+" "/data mounted without nosuid flag"
+        fi
     else
-        log_print "+" "/data mounted without nosuid flag"
+        log_print "-" "/data is not mounted, ignoring"
     fi
-else
-    log_print "-" "/data is not mounted, ignoring"
-fi
 
-# 3. Работа с Loop-устройством
-LOOP_PATH=$(get_loop_dev "${FILE_ABS}")
+    # 3. Работа с Loop-устройством
+    LOOP_PATH=$(get_loop_dev "${FILE_ABS}")
 
-if [ -z "${LOOP_PATH}" ]; then
-    log_print "+" "Creating loopback for ${FILE_ABS}"
-    LOOP_PATH=$(losetup -f --show "${FILE_ABS}")
-    
-    if [ $? -ne 0 ]; then
-        log_print "!" "Failed to create loopback device. Aborted"
+    if [ -z "${LOOP_PATH}" ]; then
+        log_print "+" "Creating loopback for ${FILE_ABS}"
+        LOOP_PATH=$(losetup -f --show "${FILE_ABS}")
+        
+        if [ $? -ne 0 ]; then
+            log_print "!" "Failed to create loopback device. Aborted"
+            exit 1
+        fi
+    else
+        log_print "+" "Found exists loopback device ${LOOP_PATH}"
+    fi
+    log_print "+" "Using device: ${LOOP_PATH}"
+
+    # 4. Монтирование основной FS
+    #log_print "+" "Mounting rootfs to ${ROOTFS_PATH}"
+    [ ! -d "${ROOTFS_PATH}" ] && mkdir -p "${ROOTFS_PATH}"
+    mount -t ext4 "${LOOP_PATH}" "${ROOTFS_PATH}"
+
+    if is_mounted "${ROOTFS_PATH}"; then
+        log_print "+" "RootFS mounted to: ${ROOTFS_PATH}"
+        log_print "i" "Verison: $(get_rootfs_name ${ROOTFS_PATH})"  
+    else
+        log_print "!" "RootFS mount fail. Aborted"
         exit 1
     fi
-else
-    log_print "+" "Found exists loopback device ${LOOP_PATH}"
+elif [ "$USE_LOOP" = "false" ]; then
+    ROOTFS_PATH="${FILE_ABS}"
 fi
-log_print "+" "Using device: ${LOOP_PATH}"
-
-# 4. Монтирование основной FS
-#log_print "+" "Mounting rootfs to ${ROOTFS_PATH}"
-[ ! -d "${ROOTFS_PATH}" ] && mkdir -p "${ROOTFS_PATH}"
-mount -t ext4 "${LOOP_PATH}" "${ROOTFS_PATH}"
-
-if is_mounted "${ROOTFS_PATH}"; then
-    log_print "+" "RootFS mounted to: ${ROOTFS_PATH}"
-    log_print "i" "Verison: $(get_rootfs_name ${ROOTFS_PATH})"  
-else
-    log_print "!" "RootFS mount fail. Aborted"
-    exit 1
-fi
-
 log_print "+" "Begin to mount binded filesystems"
 
 # 5. Bind mount системных директорий
@@ -375,23 +392,27 @@ cleanup() {
         fi
     done
 
-    umount -l "${ROOTFS_PATH}"
-    if ! is_mounted "${ROOTFS_PATH}"; then
-        rm -rf "${ROOTFS_PATH}"
-        if [ ! -d  "${ROOTFS_PATH}" ]; then
-            log_print "+" "Cleanup ${ROOTFS_PATH}"
+    if [ "${USE_LOOP}" = "true" ]; then
+        umount -l "${ROOTFS_PATH}"
+        if ! is_mounted "${ROOTFS_PATH}"; then
+            rm -rf "${ROOTFS_PATH}"
+            if [ ! -d  "${ROOTFS_PATH}" ]; then
+                log_print "+" "Cleanup ${ROOTFS_PATH}"
+            else
+                log_print "!" "RootFS cleanup error"
+            fi
         else
-            log_print "!" "RootFS cleanup error"
+            log_print "!" "Error unmount RootFS"
         fi
-    else
-        log_print "!" "Error unmount RootFS"
     fi
 
     sleep 1
-
-    log_print "+" "Removing loopback device (${LOOP_PATH})"
-    if [ -b "${LOOP_PATH}" ]; then
-        losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "!" "The loopback device is busy or removed before, may be cleared on reboot. Strange"
+    
+    if [ "${USER_LOOP}" = "true" ]; then
+        log_print "+" "Removing loopback device (${LOOP_PATH})"
+        if [ -b "${LOOP_PATH}" ]; then
+            losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "!" "The loopback device is busy or removed before, may be cleared on reboot. Strange"
+        fi
     fi
 
     log_print "+" "Syncing"
