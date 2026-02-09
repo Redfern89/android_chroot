@@ -166,9 +166,11 @@ get_rootfs_name() {
 
 get_cpu() {
     if [ -f "/proc/cpuinfo" ]; then
-       awk -F '\\s*: | @' \
+        cpu=$(awk -F '\\s*: | @' \
             '/model name|Hardware|Processor|^cpu model|chip type|^cpu type/ {
-            cpu=$2; if ($1 == "Hardware") exit } END { print cpu }' "/proc/cpuinfo"
+            cpu=$2; if ($1 == "Hardware") exit } END { print cpu }' "/proc/cpuinfo")
+        [ ! -z "${cpu}" ] && echo "${cpu}"
+        [ -z "${cpu}" ] && echo "Unknown"
     else
         echo "Unknown"
     fi
