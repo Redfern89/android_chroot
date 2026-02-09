@@ -169,6 +169,8 @@ get_cpu() {
        awk -F '\\s*: | @' \
             '/model name|Hardware|Processor|^cpu model|chip type|^cpu type/ {
             cpu=$2; if ($1 == "Hardware") exit } END { print cpu }' "/proc/cpuinfo"
+    else
+        echo "Unknown"
     fi
 }
 
