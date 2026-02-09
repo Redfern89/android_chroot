@@ -395,7 +395,7 @@ for shell in $SHELLS; do
     
     SHELL_COUNT=$((SHELL_COUNT + 1))
     if echo "$SHELL_PATH" | grep -q "su"; then
-        echo "    ${SHELL_COUNT}. \033[1;31m$SHELL_PATH\033[0m"
+        echo "    ${SHELL_COUNT}. \033[1;31m$SHELL_PATH\033[0m [ROOT]"
     else
         echo "    ${SHELL_COUNT}. $SHELL_PATH"
     fi
