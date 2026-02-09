@@ -118,13 +118,13 @@ get_rootfs_name() {
     echo "$version"
 }
 
-log_print "i" "Running as: $(whoami)"
-
 # Базовые проверки
 if [ "$(id -u)" -ne 0 ]; then
     log_print "!" "Not root. Aborted"
     exit 1
 fi
+
+log_print "i" "Running as: $(whoami)"
 
 # 1. Проверка аргумента
 if [ -z "$FILE" ]; then
