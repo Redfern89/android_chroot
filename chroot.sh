@@ -1,11 +1,13 @@
 #!/usr/bin/env sh
 
-FILE=$1
+ROOTFS_FULL=$(realpath "$1")
+ROOTFS_BASE=$(basename "$1")
 PWD=$(cd "$(dirname "$0")" && pwd)
 
 if [ -f "${PWD}/banner.sh" ]; then
     sh "${PWD}/banner.sh"
 fi
+
 
 log_print() {
     color="\033[0m"
@@ -25,16 +27,74 @@ log_print() {
     fi
 }
 
-# Список необходимых утилит
-for util in mount umount losetup realpath dirname basename grep sed id lsof; do
-    if ! command -v "$util" > /dev/null 2>&1; then
-        log_print "!" "Required utility '$util' not found. Aborted"
-        exit 1
+log_print "i" "Running as: $(whoami)"
+
+if [ "$(id -u)" -ne 0 ]; then
+    log_print "!" "Not root. Aborted"
+    exit 1
+fi
+
+# Настройки окружения
+export PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export USER=root
+export HOME=/root
+export HOST=fck-phone
+export TERM=xterm-256color
+
+# Параметры и переменные
+TMPFS_SIZE=500M
+LOCAL_DIR="/data/local"
+KERNEL_CONFIG_FILE=""
+SHELLS="sh bash zsh"
+BIND_FS_PATHS="dev dev/pts sys proc"
+MASKING_BINDERS="binder hwbinder vndbinder"
+CLEANUP_BINDERS="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys poc dev"
+EXTERNAL_STORAGE_PARTS=""
+USE_LOOP_DEV=""
+LOOP_MOUNT_POINT="/data/local"
+KERNEL_CONFIG_FILE=""
+KERNEL_CHECK_FEATURE_CMD=""
+ROOTFS_PATH=""
+SHELLS="sh bash zsh su"
+FOUND_SHELLS=""
+SHELL_COUNT=0
+
+[ -f "$ROOTFS_FULL" ] && USE_LOOP_DEV="true"
+[ -d "$ROOTFS_FULL" ] && USE_LOOP_DEV="false"
+[ -d "$ROOTFS_FULL" ] && ROOTFS_PATH="$ROOTFS_FULL"
+
+if [ -z "$USE_LOOP_DEV" ]; then
+    log_print "!" "Path ${ROOTFS_FULL} is not blockdevice or rootfs directory. Aborted"
+    exit 1
+fi
+
+if [ -f "/boot/config-$(uname -r)" ]; then
+    KERNEL_CHECK_FEATURE_CMD="cat"
+    KERNEL_CONFIG_FILE="/boot/config-$(uname -r)"
+elif [ -f "/proc/config.gz" ]; then
+    KERNEL_CONFIG_FILE="/proc/config.gz"
+
+    if command -v zcat > /dev/null 2>&1; then
+        KERNEL_CHECK_FEATURE_CMD="zcat"
+    elif command -v gzip > /dev/null 2>&1; then
+        KERNEL_CHECK_FEATURE_CMD="gzip -dc"
     fi
-done
+fi
+
+check_kernel_feature() {
+    if [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
+        ${KERNEL_CHECK_FEATURE_CMD} "${KERNEL_CONFIG_FILE}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
+    else
+        return 1
+    fi
+}
+
+get_loop_dev_file() {
+    losetup -j "$1" | head -n1 | cut -d: -f1
+}
 
 get_loop_dev() {
-    losetup -j "$1" | head -n1 | cut -d: -f1
+    losetup "$1" | sed 's/^.*(//;s/)$//'
 }
 
 is_mounted() {
@@ -118,101 +178,23 @@ get_rootfs_name() {
     echo "$version"
 }
 
-# Базовые проверки
-if [ "$(id -u)" -ne 0 ]; then
-    log_print "!" "Not root. Aborted"
-    exit 1
-fi
-
-log_print "i" "Running as: $(whoami)"
-
-# 1. Проверка аргумента
-if [ -z "$FILE" ]; then
-    echo "Usage: $0 <path_to_file>"
-    exit 1
-fi
-
-# Настройки окружения
-export PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export USER=root
-export HOME=/root
-export HOST=fck-phone
-export TERM=xterm-256color
-
-# Параметры и переменные
-LOCAL_DIR="/data/local"
-KERNEL_CONFIG_FILE=""
-SHELLS="sh bash zsh"
-BIND_FS_PATHS="dev dev/pts sys proc"
-MASKING_BINDERS="binder hwbinder vndbinder"
-CLEANUP_BINDERS="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys poc dev"
-FILE_ABS=$(realpath "$FILE")
-ROOTFS_PATH="${LOCAL_DIR}/$(basename ${FILE})"
-LOOP_PATH=""
-TMPFS_SIZE=500M
-USE_NS_KERNEL=false
-EXTERNAL_STORAGE_PARTS=""
-IMAGE_DIRECTORY="${PWD}/components"
-KERNEL_CHECK_FEATURE_CMD=""
-FOUND_SHELLS=""
-SHELL_COUNT=0
-
-case "${FILE_ABS}" in
-    "")
-        USE_LOOP="false"
-        ;;
-    *)
-        if [ -f "${FILE_ABS}" ]; then
-            USE_LOOP="true"
-        elif [ -d "${FILE_ABS}" ]; then
-            USE_LOOP="false"
-        fi
-        ;;
-esac
-
-if [ -f "/boot/config-$(uname -r)" ]; then
-    KERNEL_CHECK_FEATURE_CMD="cat"
-    KERNEL_CONFIG_FILE="/boot/config-$(uname -r)"
-elif [ -f "/proc/config.gz" ]; then
-    if [ -f "/proc/config.gz" ]; then
-        KERNEL_CONFIG_FILE="/proc/config.gz"
-        if command -v zcat >/dev/null 2>&1; then
-            KERNEL_CHECK_FEATURE_CMD="zcat"
-        else
-            KERNEL_CHECK_FEATURE_CMD="gzip -dc"
-        fi
-    fi
-fi
-
-check_kernel_feature() {
-    if [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
-        ${KERNEL_CHECK_FEATURE_CMD} "${KERNEL_CONFIG_FILE}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
-    else
-        return 1
-    fi
-}
-
-[ "$USE_LOOP" = "false" ] || log_print "i" "Input file: $(basename $FILE), size=$(du -sh $FILE_ABS | cut -f1)"
+[ "${USE_LOOP_DEV}" = "true" ] && log_print "i" "Input file: ${ROOTFS_BASE}, size=$(du -sh ${ROOTFS_FULL} | cut -f1)"
 
 if command -v getprop > /dev/null 2>&1; then
     log_print "i" "Device: $(getprop ro.product.model) ($(getprop ro.product.product.device))"
     log_print "i" "Vendor: $(getprop ro.product.manufacturer)"
     log_print "i" "Android version: $(getprop ro.vendor.build.version.release)"
 else
-    log_print "i" "Possibly running outside Android. Ignoring"
+    log_print "-" "Possibly running outside Android. Ignoring"
 fi
 
 command -v magisk > /dev/null 2>&1 && log_print "i" "Magisk version: $(magisk -v)"
 
-log_print "i" "Arch: $(uname -m)"
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Utils: $(get_coreutils)"
 log_print "i" "Terminal: $(get_term)"
 
-[ -z "${KERNEL_CHECK_FEATURE_CMD}" ] && log_print "-" "GZIP Utils required to check kernel. Ignoring"
-
-# /proc/config.gz (or /boot/config-<kernel-version>) checking
-if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
+if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ ! -z "${KERNEL_CHECK_FEATURE_CMD}" ]; then
     log_print "+" "Checking kernel features (Using: ${KERNEL_CONFIG_FILE})"
 
     if check_kernel_feature 'NAMESPACES'; then
@@ -223,14 +205,13 @@ if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; the
     fi
 
     if ! check_kernel_feature 'BLK_DEV_LOOP'; then
-        log_print "!" "Loopback block devices not supported. Aborted"
-        exit 1
+        log_print "-" "Loopback block devices not supported."
     else
         log_print "+" "Loopback block devices supported."
     fi
 
     if check_kernel_feature 'ANDROID_PARANOID_NETWORK'; then
-        log_print "!" "ANDROID_PARANOID_NETWORK enabled. Network is stuck"
+        log_print "-" "ANDROID_PARANOID_NETWORK enabled. Network is stuck"
     else
         log_print "+" "ANDROID_PARANOID_NETWORK disabled. Network sockets workflow"
     fi
@@ -243,87 +224,75 @@ if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; the
             log_state="All is oaky"
             color="\033[1;32m"
             if [ "${selinux_state}" = "enforcing" ]; then
-                log_lvl="!"
+                log_lvl="-"
                 log_state="There may be problems"
                 color="\033[1;31m"
             fi
             log_print "${log_lvl}" "SELinux in ${color}${selinux_state}\033[0m state. ${log_state}"
         else
-            log_print "-" "getenforce not available, ignoring"
+            log_print "-" "getenforce not available. Ignoring"
         fi
     fi
 else
-    log_print "!" "kernel configuration is not available. ignoring"
+    log_print "-" "Checking kernel features unavailable. Ignoring"
 fi
 
-# 2. Базовые проверки
-if [ ! -d "${LOCAL_DIR}" ] && [ "${USE_LOOP}" = "true" ]; then
-    log_print "!" "Directory ${LOCAL_DIR} not found. Aborted"
-    exit 1
-fi
-
-if [ "${USE_LOOP}" = "true" ]; then
-    if is_mounted "/data"; then
-        if check_mount_flag "/data" "nosuid"; then
-            mount -o remount,dev,suid /data
-            log_print "+" "/data remounted with fix FUCKING setuid issue"
-        else
-            log_print "+" "/data mounted without nosuid flag"
-        fi
-    else
-        log_print "-" "/data is not mounted, ignoring"
-    fi
-
-    # 3. Работа с Loop-устройством
-    LOOP_PATH=$(get_loop_dev "${FILE_ABS}")
-
+if [ "${USE_LOOP_DEV}" = "true" ]; then
+    LOOP_PATH=$(get_loop_dev_file "$ROOTFS_FULL")
     if [ -z "${LOOP_PATH}" ]; then
-        log_print "+" "Creating loopback for ${FILE_ABS}"
-        LOOP_PATH=$(losetup -f --show "${FILE_ABS}")
-        
+        LOOP_PATH=$(losetup -f --show "${ROOTFS_FULL}")
+
         if [ $? -ne 0 ]; then
             log_print "!" "Failed to create loopback device. Aborted"
             exit 1
         fi
+        log_print "+" "Created loopback device: ${LOOP_PATH}"
     else
         log_print "+" "Found exists loopback device ${LOOP_PATH}"
     fi
-    log_print "+" "Using device: ${LOOP_PATH}"
 
-    # 4. Монтирование основной FS
-    #log_print "+" "Mounting rootfs to ${ROOTFS_PATH}"
-    [ ! -d "${ROOTFS_PATH}" ] && mkdir -p "${ROOTFS_PATH}"
-    mount -t ext4 "${LOOP_PATH}" "${ROOTFS_PATH}"
-
-    if is_mounted "${ROOTFS_PATH}"; then
-        log_print "+" "RootFS mounted to: ${ROOTFS_PATH}"
-        log_print "i" "Verison: $(get_rootfs_name ${ROOTFS_PATH})"  
-    else
-        log_print "!" "RootFS mount fail. Aborted"
-        exit 1
+    TARGET_MOUNT="${LOOP_MOUNT_POINT}/${ROOTFS_BASE}"
+    [ ! -d "${TARGET_MOUNT}" ] && mkdir -p "${TARGET_MOUNT}"
+    if [ -d "${TARGET_MOUNT}" ]; then
+        if ! is_mounted "${TARGET_MOUNT}"; then
+            mount "${LOOP_PATH}" "${TARGET_MOUNT}"
+            if is_mounted "${TARGET_MOUNT}"; then
+                log_print "+" "RootFS mounted to: ${TARGET_MOUNT}"
+                log_print "i" "Verison: $(get_rootfs_name ${TARGET_MOUNT})"
+                ROOTFS_PATH="${TARGET_MOUNT}"
+            else
+                log_print "!" "Failed to mount RootFS. Aborted"
+                losetup -d "${LOOP_PATH}"
+                exit 1
+            fi
+        else
+            log_print "!" "Mountpoint ${TARGET_MOUNT} is busy. Aborted"
+            exit 1
+        fi
     fi
-elif [ "$USE_LOOP" = "false" ]; then
-    ROOTFS_PATH="${FILE_ABS}"
 fi
-log_print "+" "Begin to mount binded filesystems"
 
-# 5. Bind mount системных директорий
+log_print "+" "Start to mount binded filesystems"
 for BIND_FS in $BIND_FS_PATHS; do
     [ ! -d "${ROOTFS_PATH}/${BIND_FS}" ] && mkdir -p "${ROOTFS_PATH}/${BIND_FS}"
-    mount --bind "/${BIND_FS}" "${ROOTFS_PATH}/${BIND_FS}"
-    if is_mounted "${ROOTFS_PATH}/${BIND_FS}"; then
-        echo "    [${BIND_FS}]"
+    if ! is_mounted "${ROOTFS_PATH}/${BIND_FS}"; then
+        mount --bind "/${BIND_FS}" "${ROOTFS_PATH}/${BIND_FS}"
+        if is_mounted "${ROOTFS_PATH}/${BIND_FS}"; then
+            echo "    [${BIND_FS}]"
+        fi
+    else
+        log_print "-" "${BIND_FS} is mounted before. Skipping"
     fi
 done
 
 # Прячем биндеры от греха подальше
-log_print "+" "Masking HW binders"
+log_print "+" "Masking HAL binders"
 for mask_fs in $MASKING_BINDERS; do
     if [ -e "/dev/${mask_fs}" ]; then 
         mount -t tmpfs tmpfs ${ROOTFS_PATH}/dev/${mask_fs} 2>/dev/null
         echo "    [${mask_fs}]"
     else
-        log_print "-" "Binder ${mask_fs} not found, ignoring"
+        log_print "-" "HAL Binder ${mask_fs} not found, ignoring"
     fi
 done
 
@@ -332,16 +301,6 @@ mount -t tmpfs -o size="${TMPFS_SIZE}" tmpfs "${ROOTFS_PATH}/tmp"
 if is_mounted "${ROOTFS_PATH}/tmp"; then
    log_print "+" "Mounted tmpfs as ${ROOTFS_PATH}/tmp (size=${TMPFS_SIZE})"
 fi
-
-#
-#  НАХУЙ!!! НЕ ИСПОЛЬЗОВАТЬ ЭТОТ КОД! ЛОМАЕТ ANDROID! ЭТО ВКЛЮЧАТЬ ОПАСНО!
-#
-# Checking internal /sdcard partition
-#if [ -d "/storage/emulated/0" ]; then
-#    log_print "+" "Found /sdcard partition, mounted to /mnt/sdcard"
-#    mkdir -p "${ROOTFS_PATH}/mnt/sdcard"
-#    mount -o bind /storage/emulated/0 "${ROOTFS_PATH}/mnt/sdcard"
-#fi
 
 # Checking external SD Card partitions
 if [ -d "/storage" ]; then
@@ -392,7 +351,7 @@ cleanup() {
         fi
     done
 
-    if [ "${USE_LOOP}" = "true" ]; then
+    if [ "${USE_LOOP_DEV}" = "true" ]; then
         umount -l "${ROOTFS_PATH}"
         if ! is_mounted "${ROOTFS_PATH}"; then
             rm -rf "${ROOTFS_PATH}"
@@ -404,14 +363,12 @@ cleanup() {
         else
             log_print "!" "Error unmount RootFS"
         fi
-    fi
 
-    sleep 1
-    
-    if [ "${USER_LOOP}" = "true" ]; then
+        sleep 1
+
         log_print "+" "Removing loopback device (${LOOP_PATH})"
         if [ -b "${LOOP_PATH}" ]; then
-            losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "!" "The loopback device is busy or removed before, may be cleared on reboot. Strange"
+            losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "-" "The loopback device is busy or removed before, may be cleared on reboot. Strange"
         fi
     fi
 
@@ -448,13 +405,11 @@ elif [ "$SHELL_COUNT" -eq 1 ]; then
     SELECTED_SHELL=$(echo "$FOUND_SHELLS" | xargs)
 else   
     while true; do
-        #printf "[?] Choice (1-$SHELL_COUNT): "
         log_print "?" "Choice (1-$SHELL_COUNT): " true
         read -r CHOICE
         
         case "$CHOICE" in
             *[!0-9]* | "")
-                #log_print "!" "Invalid argument: ${CHOICE}"
                 continue
                 ;;
         esac
@@ -464,8 +419,6 @@ else
         if [ ! -z "$SELECTED_SHELL" ] && [ -f "${ROOTFS_PATH}/${SELECTED_SHELL}" ]; then
            log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL"
            break
-        #else
-        #   log_print "!" "Invalid argument: ${CHOICE}"
         fi
     done
     
@@ -476,5 +429,3 @@ else
         exit 1
     fi
 fi
-
-################ ЧИСТКА ТРУПОВ ################
