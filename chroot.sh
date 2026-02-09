@@ -193,8 +193,6 @@ if [ -f "${PWD}/android" ]; then
     sh "${PWD}/android"
 fi
 
-exit 1
-
 command -v magisk > /dev/null 2>&1 && log_print "i" "Magisk version: $(magisk -v)"
 
 log_print "i" "Arch: $(uname -m)"
