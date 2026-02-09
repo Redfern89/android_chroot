@@ -232,7 +232,7 @@ if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ ! -z "${KERNEL_CHECK_FEATURE_CMD}" ]; t
         if check_kernel_feature 'ANDROID_PARANOID_NETWORK'; then
             log_print "-" "ANDROID_PARANOID_NETWORK enabled. Network is stuck"
         else
-            log_print "+" "ANDROID_PARANOID_NETWORK disabled. Network sockets workflow"
+            log_print "+" "ANDROID_PARANOID_NETWORK disabled. Network sockets alive"
         fi
     fi
 
