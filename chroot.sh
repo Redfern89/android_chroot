@@ -7,14 +7,6 @@ if [ -f "${PWD}/banner.sh" ]; then
     sh "${PWD}/banner.sh"
 fi
 
-# Список необходимых утилит
-for util in mount umount losetup realpath dirname basename grep sed id lsof; do
-    if ! command -v "$util" > /dev/null 2>&1; then
-        log_print "!" "Required utility '$util' not found. Aborted"
-        exit 1
-    fi
-done
-
 log_print() {
     color="\033[0m"
 
@@ -32,6 +24,14 @@ log_print() {
         echo "${color}[${1}]\033[0m $2"
     fi
 }
+
+# Список необходимых утилит
+for util in mount umount losetup realpath dirname basename grep sed id lsof; do
+    if ! command -v "$util" > /dev/null 2>&1; then
+        log_print "!" "Required utility '$util' not found. Aborted"
+        exit 1
+    fi
+done
 
 get_loop_dev() {
     losetup -j "$1" | head -n1 | cut -d: -f1
