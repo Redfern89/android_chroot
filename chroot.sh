@@ -90,6 +90,10 @@ check_kernel_feature() {
     fi
 }
 
+get_mountpoint_by_dev() {
+    grep "^$1[[:space:]]" /proc/mounts | head -n1 | cut -d' ' -f2
+}
+
 get_loop_dev_file() {
     losetup -j "$1" | head -n1 | cut -d: -f1
 }
@@ -189,7 +193,7 @@ else
     log_print "-" "Possibly running outside Android. Ignoring"
 fi
 
-if [ -f "${PWD}/android" ]; then
+if [ -f "${PWD}/android" && "${IS_ANDROID}" = "true" ]; then
     sh "${PWD}/android"
 fi
 
@@ -284,8 +288,15 @@ if [ "${USE_LOOP_DEV}" = "true" ]; then
                 exit 1
             fi
         else
-            log_print "!" "Mountpoint ${TARGET_MOUNT} is busy. Aborted"
-            exit 1
+            log_print "-" "Mountpoint ${TARGET_MOUNT} is busy. Fucked strange."
+            BUSY_MNT=$(get_mountpoint_by_dev "${LOOP_PATH}")
+            if [ "${BUSY_MNT}" = "${TARGET_MOUNT}" ]; then
+                ROOTFS_PATH="${TARGET_MOUNT}"
+                log_print "+" "Mountpoint ${TARGET_MOUNT} used by ${LOOP_PATH}, okay"
+            else
+                log_print "!" "Mountpoint ${TARGET_MOUNT} used by ${LOOP_PATH}. Aborted"
+                exit 1
+            fi
         fi
     fi
 fi
