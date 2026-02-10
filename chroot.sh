@@ -4,8 +4,8 @@ ROOTFS_FULL=$(realpath "$1")
 ROOTFS_BASE=$(basename "$1")
 PWD=$(cd "$(dirname "$0")" && pwd)
 
-if [ -f "${PWD}/banner.sh" ]; then
-    sh "${PWD}/banner.sh"
+if [ -f "${PWD}/banner" ]; then
+    sh "${PWD}/banner"
 fi
 
 log_print() {
