@@ -193,7 +193,7 @@ else
     log_print "-" "Possibly running outside Android. Ignoring"
 fi
 
-if [ -f "${PWD}/android" && "${IS_ANDROID}" = "true" ]; then
+if [ -f "${PWD}/android" ] && [ "${IS_ANDROID}" = "true" ]; then
     sh "${PWD}/android"
 fi
 
