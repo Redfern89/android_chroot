@@ -318,12 +318,12 @@ done
 
 # Прячем биндеры от греха подальше
 log_print "+" "Masking HAL binders"
-for MASKING_BINDER_FS in $HAL_BINDERS; do
-    if [ -e "/dev/${MASKING_BINDER_FS}" ]; then 
-        mount -t tmpfs tmpfs ${ROOTFS_PATH}/dev/${MASKING_BINDER_FS} 2>/dev/null
-        echo "    [${MASKING_BINDER_FS}]"
+for HAL_BINDER in $HAL_BINDERS; do
+    if [ -e "/dev/${HAL_BINDER}" ]; then 
+        mount -t tmpfs tmpfs ${ROOTFS_PATH}/dev/${HAL_BINDER} 2>/dev/null
+        echo "    [${HAL_BINDER}]"
     else
-        log_print "-" "HAL Binder ${MASKING_BINDER_FS} not found, ignoring"
+        log_print "-" "HAL Binder ${HAL_BINDER} not found, ignoring"
     fi
 done
 
