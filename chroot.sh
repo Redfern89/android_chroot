@@ -238,21 +238,23 @@ if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ ! -z "${KERNEL_CHECK_FEATURE_CMD}" ]; t
         fi
     fi
 
-    if check_kernel_feature 'SECURITY_SELINUX'; then
-        # Fucking SE Linux
-        if command -v getenforce > /dev/null 2>&1; then
-            selinux_state=$(getenforce | tr '[:upper:]' '[:lower:]')
-            log_lvl="+"
-            log_state="All is oaky"
-            color="\033[1;32m"
-            if [ "${selinux_state}" = "enforcing" ]; then
-                log_lvl="-"
-                log_state="There may be problems"
-                color="\033[1;31m"
+    if [ "${IS_ANDROID}" = "true" ]; then
+        if check_kernel_feature 'SECURITY_SELINUX'; then
+            # Fucking SE Linux
+            if command -v getenforce > /dev/null 2>&1; then
+                selinux_state=$(getenforce | tr '[:upper:]' '[:lower:]')
+                log_lvl="+"
+                log_state="All is oaky"
+                color="\033[1;32m"
+                if [ "${selinux_state}" = "enforcing" ]; then
+                    log_lvl="-"
+                    log_state="There may be problems"
+                    color="\033[1;31m"
+                fi
+                log_print "${log_lvl}" "SELinux in ${color}${selinux_state}\033[0m state. ${log_state}"
+            else
+                log_print "-" "getenforce not available. Ignoring"
             fi
-            log_print "${log_lvl}" "SELinux in ${color}${selinux_state}\033[0m state. ${log_state}"
-        else
-            log_print "-" "getenforce not available. Ignoring"
         fi
     fi
 else
@@ -385,13 +387,14 @@ cleanup() {
 
     for umnt_path in $CLEANUP_BINDERS; do
         if [ -d "${ROOTFS_PATH}/${umnt_path}" ]; then
+            umount -l "${ROOTFS_PATH}/${umnt_path}"
             if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
                 log_print "+" "Cleanup ${ROOTFS_PATH}/${umnt_path}"
             else
                 log_print "!" "Error umounting: ${umnt_path}"
             fi
         else
-            log_print "-" "Directory ${umnt_path} does not exists. WTF??!"
+            log_print "-" "Directory ${ROOTFS_PATH}/${umnt_path} does not exists. WTF??!"
         fi
     done
 
