@@ -326,9 +326,13 @@ for MASKING_BINDER_FS in $HAL_BINDERS; do
 done
 
 # tmpfs
-mount -t tmpfs -o size="${TMPFS_SIZE}" tmpfs "${ROOTFS_PATH}/tmp"
-if is_mounted "${ROOTFS_PATH}/tmp"; then
-   log_print "+" "Mounted tmpfs as ${ROOTFS_PATH}/tmp (size=${TMPFS_SIZE})"
+if ! is_mounted "${ROOTFS_PATH}/tmp"; then
+    mount -t tmpfs -o size="${TMPFS_SIZE}" tmpfs "${ROOTFS_PATH}/tmp"
+    if is_mounted "${ROOTFS_PATH}/tmp"; then
+        log_print "+" "Mounted tmpfs as ${ROOTFS_PATH}/tmp (size=${TMPFS_SIZE})"
+    fi
+else
+    log_print "-" "${ROOTFS_PATH}/tmp was mounted before. Fucking strange. Skipping"
 fi
 
 # Checking external SD Card partitions
@@ -338,11 +342,15 @@ if [ -d "/storage" ]; then
         if [ "${base}" != "emulated" ] && [ "${base}" != "self" ]; then
             if [ -d "${dir}" ]; then
                 mkdir -p "${ROOTFS_PATH}/mnt/${base}"
-                mount -o bind "${dir}" "${ROOTFS_PATH}/mnt/${base}"
-                if is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
-                    EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${ROOTFS_PATH}/mnt/${base}
-"
-                    log_print "+" "Found external storage at ${dir}, mounted to /mnt/${base}"
+                if ! is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
+                    mount -o bind "${dir}" "${ROOTFS_PATH}/mnt/${base}"
+                    if is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
+                        EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${ROOTFS_PATH}/mnt/${base}
+    "
+                        log_print "+" "Found external storage at ${dir}, mounted to /mnt/${base}"
+                    fi
+                else
+                    log_print "-" "${dir} was mounted before. Fucking strange."
                 fi
             fi
         fi
@@ -364,33 +372,44 @@ cleanup() {
 
     echo "$EXTERNAL_STORAGE_PARTS" | while IFS= read -r m; do
         [ -z "$m" ] && continue
-        log_print "+" "Cleanup ${m}"
-        umount "$m"
-        if ! is_mounted "$m"; then
-            rm -rf "$m"
+        if [ -d "$m" ]; then
+            log_print "+" "Cleanup ${m}"
+            umount "$m"
+            if ! is_mounted "$m"; then
+                rm -rf "$m"
+            fi
+        else
+            log_print "-" "Directory ${m} does not exists. WTF??!"
         fi
     done
 
     for umnt_path in $CLEANUP_BINDERS; do
-        [ -d "${ROOTFS_PATH}/${umnt_path}" ] && umount -l "${ROOTFS_PATH}/${umnt_path}"
-        if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
-            log_print "+" "Cleanup ${ROOTFS_PATH}/${umnt_path}"
+        if [ -d "${ROOTFS_PATH}/${umnt_path}" ]; then
+            if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
+                log_print "+" "Cleanup ${ROOTFS_PATH}/${umnt_path}"
+            else
+                log_print "!" "Error umounting: ${umnt_path}"
+            fi
         else
-            log_print "!" "Error umounting: ${umnt_path}"
+            log_print "-" "Directory ${umnt_path} does not exists. WTF??!"
         fi
     done
 
     if [ "${USE_LOOP_DEV}" = "true" ]; then
-        umount -l "${ROOTFS_PATH}"
-        if ! is_mounted "${ROOTFS_PATH}"; then
-            rm -rf "${ROOTFS_PATH}"
-            if [ ! -d  "${ROOTFS_PATH}" ]; then
-                log_print "+" "Cleanup ${ROOTFS_PATH}"
+        if [ -d "${ROOTFS_PATH}" ]; then
+            umount -l "${ROOTFS_PATH}"
+            if ! is_mounted "${ROOTFS_PATH}"; then
+                rm -rf "${ROOTFS_PATH}"
+                if [ ! -d  "${ROOTFS_PATH}" ]; then
+                    log_print "+" "Cleanup ${ROOTFS_PATH}"
+                else
+                    log_print "!" "RootFS cleanup error"
+                fi
             else
-                log_print "!" "RootFS cleanup error"
+                log_print "!" "Error unmount RootFS"
             fi
         else
-            log_print "!" "Error unmount RootFS"
+            log_print "-" "Directory ${ROOTFS_PATH} does not exists. WTF??!"
         fi
 
         sleep 1
