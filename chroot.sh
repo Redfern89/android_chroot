@@ -320,7 +320,7 @@ done
 log_print "+" "Masking HAL binders"
 for HAL_BINDER in $HAL_BINDERS; do
     if [ -e "/dev/${HAL_BINDER}" ]; then 
-        mount -t tmpfs tmpfs ${ROOTFS_PATH}/dev/${HAL_BINDER} 2>/dev/null
+        mount -t tmpfs tmpfs -o mode=000 ${ROOTFS_PATH}/dev/${HAL_BINDER} 2>/dev/null
         echo "    [${HAL_BINDER}]"
     else
         log_print "-" "HAL Binder ${HAL_BINDER} not found, ignoring"
