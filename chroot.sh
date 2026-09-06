@@ -42,6 +42,7 @@ export TERM=xterm-256color
 export PS1="(chroot) ${PS1}"
 
 # Параметры и переменные
+DEBUG="true"
 DEF_HOST=fck-phone
 TMPFS_SIZE=500M
 LOCAL_DIR="/data/local"
@@ -50,7 +51,7 @@ SHELLS="sh ash bash zsh"
 CLEANUP_DIRS="home/* root"
 BIND_FS_PATHS="dev dev/pts sys proc"
 FILES_TO_REMOVE=".bash_history .zsh_history .zcompdump"
-DIRS_TO_REMOVE=".cache .ssh"
+DIRS_TO_REMOVE=".cache .ssh .cashe"
 HAL_BINDERS="binder hwbinder vndbinder"
 CLEANUP_BINDERS="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys proc dev"
 EXTERNAL_STORAGE_PARTS=""
@@ -184,6 +185,27 @@ get_rootfs_hostname() {
     else
         return 1
     fi
+}
+
+get_rootfs_hosts() {
+    local rootfs="${1}"
+    local hosts_file="${rootfs}/etc/hosts"
+
+        if [ -f "${hosts_file}" ]; then
+            while IFS= read -r line; do
+                [ -z "${line}" ] && continue
+                
+                case "${line}" in
+                    "#"*) continue ;;
+                esac
+
+                local ip=$(echo "${line}" | awk -F ' ' '{ print $1 }')
+                local host=$(echo "${line}" | awk -F ' ' '{ print $2 }')
+                
+                [ "${ip}" = "127.0.1.1" ] && log_print "i" "Fund hostname: ${host}"
+
+            done < "${hosts_file}"
+        fi
 }
 
 get_cpu() {
@@ -378,21 +400,23 @@ for BIND_FS in $BIND_FS_PATHS; do
 done
 
 # Прячем биндеры от греха подальше
-log_print "+" "Masking HAL binders"
-for HAL_BINDER in $HAL_BINDERS; do
-    if [ -e "/dev/${HAL_BINDER}" ]; then 
-        mount -t tmpfs tmpfs -o mode=000 ${ROOTFS_PATH}/dev/${HAL_BINDER} 2>/dev/null
-        echo "    [${HAL_BINDER}]"
-    else
-        log_print "-" "HAL Binder '${HAL_BINDER}' not found, ignoring"
-    fi
-done
+if [ "${IS_ANDROID}" = "true" ]; then
+    log_print "+" "Masking HAL binders"
+    for HAL_BINDER in $HAL_BINDERS; do
+        if [ -e "/dev/${HAL_BINDER}" ]; then 
+            mount -t tmpfs tmpfs -o mode=000 ${ROOTFS_PATH}/dev/${HAL_BINDER} 2>/dev/null
+            echo "    [${HAL_BINDER}]"
+        else
+            log_print "-" "HAL Binder '${HAL_BINDER}' not found, ignoring"
+        fi
+    done
+fi
 
 # tmpfs
 if ! is_mounted "${ROOTFS_PATH}/tmp"; then
     mount -t tmpfs -o size="${TMPFS_SIZE}" tmpfs "${ROOTFS_PATH}/tmp"
     if is_mounted "${ROOTFS_PATH}/tmp"; then
-        log_print "+" "Mounted tmpfs as ${ROOTFS_PATH}/tmp (size=${TMPFS_SIZE})"
+        log_print "+" "Mounted tmpfs at ${ROOTFS_PATH}/tmp (size=${TMPFS_SIZE})"
     fi
 else
     log_print "-" "${ROOTFS_PATH}/tmp was mounted before. Fucking strange. Skipping"
@@ -408,8 +432,7 @@ if [ -d "/storage" ]; then
                 if ! is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
                     mount -o bind "${dir}" "${ROOTFS_PATH}/mnt/${base}"
                     if is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
-                        EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${ROOTFS_PATH}/mnt/${base}
-    "
+                        EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${ROOTFS_PATH}/mnt/${base}"
                         log_print "+" "Found external storage at ${dir}, mounted to /mnt/${base}"
                     fi
                 else
@@ -420,10 +443,13 @@ if [ -d "/storage" ]; then
     done
 fi
 
+get_rootfs_hosts "${ROOTFS_PATH}"
+
 if GET_HOSTNAME=$(get_rootfs_hostname "${ROOTFS_PATH}" 2>/dev/null); then
     DEF_HOST="${GET_HOSTNAME}"
 fi
 
+trap cleanup INT TERM HUP EXIT
 
 log_print "?" "Enter hostname (default: ${DEF_HOST}): " true
 while true; do
@@ -450,12 +476,14 @@ cleanup() {
         for user_dir in "${ROOTFS_PATH}/"${pattern}; do
             [ ! -d "${user_dir}" ] && continue
 
-            log_print "D" "Found dir: ${user_dir}"
+            [ "${DEBUG}" = "true" ] && log_print "D" "Found dir: ${user_dir}"
 
             for rm_dir in ${DIRS_TO_REMOVE}; do
+                if [ -d "${user_dir}/${rm_dir}" ]; then
                 rm -rf "${user_dir}/${rm_dir}"
-                [ ! -d "${user_dir}/${rm_dir}" ] && log_print "+" "Removed ${user_dir}/${rm_dir}"
-                [ -d "${user_dir}/${rm_dir}" ] && log_print "-" "${user_dir}/${rm_dir} not removed. WTF???"
+                    [ ! -d "${user_dir}/${rm_dir}" ] && log_print "+" "Removed ${user_dir}/${rm_dir}"
+                    [ -d "${user_dir}/${rm_dir}" ] && log_print "-" "${user_dir}/${rm_dir} not removed. WTF???"
+                fi
             done
 
             for file_pattern in ${FILES_TO_REMOVE}; do
@@ -545,7 +573,6 @@ cleanup() {
     exit 0
 }
 
-trap cleanup INT TERM HUP EXIT
 
 log_print "@" "Select shell to use"
 for user in $(grep -Ff "${ROOTFS_PATH}/etc/shells" "${ROOTFS_PATH}/etc/passwd" | cut -d: -f1); do
