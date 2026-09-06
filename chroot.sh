@@ -18,7 +18,8 @@ log_print() {
     [ "$1" = "?" ] && color="\033[1;36m"
     [ "$1" = "*" ] && color="\033[1;33m"
     [ "$1" = "@" ] && color="\033[1;34m"
-    
+    [ "$1" = "D" ] && color="\033[1;30m"
+
     if [ "$3" = true ]; then
     	echo -n "${color}[${1}]\033[0m $2"
     else
@@ -35,18 +36,21 @@ fi
 
 # Настройки окружения
 export PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export USER=root
-export HOME=/root
-export HOST=fck-phone
+#export USER=root
+#export HOME=/root
 export TERM=xterm-256color
 export PS1="(chroot) ${PS1}"
 
 # Параметры и переменные
+DEF_HOST=fck-phone
 TMPFS_SIZE=500M
 LOCAL_DIR="/data/local"
 KERNEL_CONFIG_FILE=""
 SHELLS="sh ash bash zsh"
+CLEANUP_DIRS="home/* root"
 BIND_FS_PATHS="dev dev/pts sys proc"
+FILES_TO_REMOVE=".bash_history .zsh_history .zcompdump"
+DIRS_TO_REMOVE=".cache .ssh"
 HAL_BINDERS="binder hwbinder vndbinder"
 CLEANUP_BINDERS="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys proc dev"
 EXTERNAL_STORAGE_PARTS=""
@@ -58,6 +62,7 @@ ROOTFS_PATH=""
 SHELLS="sh bash zsh su"
 FOUND_SHELLS=""
 SHELL_COUNT=0
+USERS_COUNT=0
 IS_ANDROID="false"
 
 [ -f "$ROOTFS_FULL" ] && USE_LOOP_DEV="true"
@@ -170,6 +175,17 @@ get_rootfs_name() {
     echo "$version"
 }
 
+get_rootfs_hostname() {
+    local rootfs="${1}"
+    local hostname_file="${rootfs}/etc/hostname"
+
+    if [ -f "${hostname_file}" ]; then
+        tr -d '[:space:]' < "${hostname_file}"
+    else
+        return 1
+    fi
+}
+
 get_cpu() {
     if [ -f "/proc/cpuinfo" ]; then
         cpu=$(awk -F '\\s*: | @' \
@@ -179,6 +195,51 @@ get_cpu() {
         [ -z "${cpu}" ] && echo "Unknown"
     else
         echo "Unknown"
+    fi
+}
+
+set_rootfs_hostname() {
+    local rootfs="${1}"
+    local set_hostname="${2}"
+
+    local hostname_file="${rootfs}/etc/hostname"
+    local hosts_file="${rootfs}/etc/hosts"
+
+    local host_exists=false
+
+    if [ -d "${rootfs}/etc" ]; then
+        echo "${set_hostname}" > "${hostname_file}"
+    fi
+
+    if [ -f "${hosts_file}" ]; then
+        while IFS= read -r line; do
+            [ -z "${line}" ] && continue
+            
+            case "${line}" in
+                "#"*) continue ;;
+            esac
+
+            local ip=$(echo "${line}" | awk -F ' ' '{ print $1 }')
+            local host=$(echo "${line}" | awk -F ' ' '{ print $2 }')
+            
+            [ "${host}" = "${set_hostname}" ] && [ "${ip}" = "127.0.1.1" ] && host_exists=true
+
+        done < "${hosts_file}"
+    else
+        # Default hosts file with set hostname
+        cat << EOF > "${hosts_file}"
+127.0.0.1       localhost
+127.0.1.1       ${set_hostname}
+
+# The following lines are desirable for IPv6 capable hosts
+::1             localhost ip6-localhost ip6-loopback
+ff02::1         ip6-allnodes
+ff02::2         ip6-allrouters
+EOF
+    fi
+
+    if [ "${host_exists}" = false ]; then
+        echo "127.0.1.1\t${set_hostname}" >> "${hosts_file}"
     fi
 }
 
@@ -323,7 +384,7 @@ for HAL_BINDER in $HAL_BINDERS; do
         mount -t tmpfs tmpfs -o mode=000 ${ROOTFS_PATH}/dev/${HAL_BINDER} 2>/dev/null
         echo "    [${HAL_BINDER}]"
     else
-        log_print "-" "HAL Binder ${HAL_BINDER} not found, ignoring"
+        log_print "-" "HAL Binder '${HAL_BINDER}' not found, ignoring"
     fi
 done
 
@@ -359,15 +420,67 @@ if [ -d "/storage" ]; then
     done
 fi
 
+if GET_HOSTNAME=$(get_rootfs_hostname "${ROOTFS_PATH}" 2>/dev/null); then
+    DEF_HOST="${GET_HOSTNAME}"
+fi
+
+
+log_print "?" "Enter hostname (default: ${DEF_HOST}): " true
+while true; do
+    read -r HOSTNAME
+
+    if [ ! -z "${HOSTNAME}" ]; then
+        export HOST="${HOSTNAME}"
+        break
+    else
+        HOSTNAME="${DEF_HOST}"
+        export HOST="${HOSTNAME}"
+        break
+    fi
+done
+
+set_rootfs_hostname "${ROOTFS_PATH}" "${HOSTNAME}"
+log_print "+" "Hostname set to: ${HOSTNAME}"
+
 cleanup() {
     trap - EXIT INT TERM HUP
+
+    log_print "i" "Cleaning chroot rootfs temporary files"
+    for pattern in ${CLEANUP_DIRS}; do
+        for user_dir in "${ROOTFS_PATH}/"${pattern}; do
+            [ ! -d "${user_dir}" ] && continue
+
+            log_print "D" "Found dir: ${user_dir}"
+
+            for rm_dir in ${DIRS_TO_REMOVE}; do
+                rm -rf "${user_dir}/${rm_dir}"
+                [ ! -d "${user_dir}/${rm_dir}" ] && log_print "+" "Removed ${user_dir}/${rm_dir}"
+                [ -d "${user_dir}/${rm_dir}" ] && log_print "-" "${user_dir}/${rm_dir} not removed. WTF???"
+            done
+
+            for file_pattern in ${FILES_TO_REMOVE}; do
+                for target in "${user_dir}"/${file_pattern}*; do
+                    
+                    if [ -f "${target}" ]; then
+                        rm -f "${target}"
+                        [ ! -f "${target}" ] && log_print "+" "Removed ${target}"
+                        [ -f "${target}" ] && log_print "-" "${target} not removed. WTF???"
+                    fi
+                    
+                done
+            done
+        done
+    done
     
-    log_print "+" "killing all chroot tails"
-    pids=$(lsof | grep "${ROOTFS_PATH}" | awk '{ print $2 }' | sort -u)
+    log_print "i" "killing all chroot tails (running lsof)"
+    #pids=$(lsof | grep "${ROOTFS_PATH}" | awk '{ print $2 }' | sort -u) # THIS IS A FUCKED CONTRUCTION
+    pids=$(lsof -t +D "${ROOTFS_PATH}")
 
     if [ -n "${pids}" ]; then
         log_print "i" "Killing pids: (${pids})"
-        kill -9 ${pids} 2>/dev/null
+        #kill -9 ${pids} 2>/dev/null # THIS IS A VERY FUCKED FRAGILE CONTRUCTION
+        echo "${pids}" | xargs kill -9 2>/dev/null
+
         sleep 1
         log_print "+" "Done"
     fi
@@ -412,7 +525,7 @@ cleanup() {
                 log_print "!" "Error unmount RootFS"
             fi
         else
-            log_print "-" "Directory ${ROOTFS_PATH} does not exists. WTF??!"
+            log_print "-" "Directory ${ROOTFS_PATH} does not exist. WTF??!"
         fi
 
         sleep 1
@@ -427,12 +540,45 @@ cleanup() {
     sync
 
     log_print "+" "Done"
-    echo "Return to shell\n\n"
+    printf "Return to shell\n\n\n"
 
     exit 0
 }
 
 trap cleanup INT TERM HUP EXIT
+
+log_print "@" "Select shell to use"
+for user in $(grep -Ff "${ROOTFS_PATH}/etc/shells" "${ROOTFS_PATH}/etc/passwd" | cut -d: -f1); do
+    USERS_COUNT=$((USERS_COUNT + 1))
+    echo "    ${USERS_COUNT}. ${user}"
+
+    FOUND_USERS="$FOUND_USERS $user"
+done
+
+if [ "$USERS_COUNT" -eq 0 ]; then
+    log_print "!" "No users found! Trying root anyway..."
+    SELECTED_USER="root"
+elif [ "$SHELL_COUNT" -eq 1 ]; then
+    SELECTED_USER=$(echo "$FOUND_USERS" | xargs)
+else   
+    while true; do
+        log_print "?" "Choice (1-$USERS_COUNT): " true
+        read -r CHOICE
+        
+        case "$CHOICE" in
+            *[!0-9]* | "")
+                continue
+                ;;
+        esac
+
+        SELECTED_USER=$(echo "$FOUND_USERS" | cut -d' ' -f"$((CHOICE + 1))")
+
+        if [ ! -z "$SELECTED_USER" ]; then
+           #log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL"
+           break
+        fi
+    done
+fi
 
 log_print "@" "Select shell to use"
 for shell in $SHELLS; do
@@ -472,13 +618,13 @@ else
         SELECTED_SHELL=$(echo "$FOUND_SHELLS" | cut -d' ' -f"$((CHOICE + 1))")
         
         if [ ! -z "$SELECTED_SHELL" ] && [ -f "${ROOTFS_PATH}/${SELECTED_SHELL}" ]; then
-           log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL"
+           log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL as ${SELECTED_USER}"
            break
         fi
     done
     
     if [ ! -z "$SELECTED_SHELL" ] && [ -x "${ROOTFS_PATH}/${SELECTED_SHELL}" ]; then
-        chroot "${ROOTFS_PATH}" "$SELECTED_SHELL"
+        chroot "${ROOTFS_PATH}" runuser -u "$SELECTED_USER" -- "$SELECTED_SHELL"
     else
         log_print "!" "Failed to find shell. Aborted"
         exit 1
