@@ -5,33 +5,16 @@ ROOTFS_BASE=$(basename "$1")
 PWD=$(cd "$(dirname "$0")" && pwd)
 
 if [ -f "${PWD}/banner" ]; then
-    sh "${PWD}/banner"
+	sh "${PWD}/banner" "chroot mount"
 fi
 
-log_print() {
-    color="\033[0m"
-
-    [ "$1" = "+" ] && color="\033[1;32m"
-    [ "$1" = "-" ] && color="\033[1;35m"
-    [ "$1" = "!" ] && color="\033[1;31m"
-    [ "$1" = "i" ] && color="\033[1;33m"
-    [ "$1" = "?" ] && color="\033[1;36m"
-    [ "$1" = "*" ] && color="\033[1;33m"
-    [ "$1" = "@" ] && color="\033[1;34m"
-    [ "$1" = "D" ] && color="\033[1;30m"
-
-    if [ "$3" = true ]; then
-    	echo -n "${color}[${1}]\033[0m $2"
-    else
-        echo "${color}[${1}]\033[0m $2"
-    fi
-}
+. "${PWD}/misc-helpers.sh"
 
 log_print "i" "Running as: $(whoami)"
 
-if [ "$(id -u)" -ne 0 ]; then
-    log_print "!" "Not root. Aborted"
-    exit 1
+if ! check_root; then
+	log_print "!" "Not root. Aborted"
+	exit 1
 fi
 
 # Настройки окружения
@@ -50,14 +33,14 @@ KERNEL_CONFIG_FILE=""
 SHELLS="sh ash bash zsh"
 CLEANUP_DIRS="home/* root"
 BIND_FS_PATHS="dev dev/pts sys proc"
-FILES_TO_REMOVE=".bash_history .zsh_history .zcompdump"
-DIRS_TO_REMOVE=".cache .ssh .cashe"
+FILES_TO_REMOVE=".bash_history .zsh_history .zcompdump .local/share/mc/history"
+DIRS_TO_REMOVE=".cache .ssh"
+ABS_DIRS_TO_REMOVE="var/lib/apt/lists"
 HAL_BINDERS="binder hwbinder vndbinder"
 CLEANUP_BINDERS="dev/binder dev/hwbinder dev/vndbinder dev/pts tmp sys proc dev"
 EXTERNAL_STORAGE_PARTS=""
 USE_LOOP_DEV=""
 LOOP_MOUNT_POINT="/data/local"
-KERNEL_CONFIG_FILE=""
 KERNEL_CHECK_FEATURE_CMD=""
 ROOTFS_PATH=""
 SHELLS="sh bash zsh su"
@@ -71,589 +54,418 @@ IS_ANDROID="false"
 [ -d "$ROOTFS_FULL" ] && ROOTFS_PATH="$ROOTFS_FULL"
 
 if [ -z "$USE_LOOP_DEV" ]; then
-    log_print "!" "Path ${ROOTFS_FULL} is not blockdevice or rootfs directory. Aborted"
-    exit 1
+	log_print "!" "Path ${ROOTFS_FULL} is not blockdevice or rootfs directory. Aborted"
+	exit 1
 fi
-
-if [ -f "/boot/config-$(uname -r)" ]; then
-    KERNEL_CHECK_FEATURE_CMD="cat"
-    KERNEL_CONFIG_FILE="/boot/config-$(uname -r)"
-elif [ -f "/proc/config.gz" ]; then
-    KERNEL_CONFIG_FILE="/proc/config.gz"
-
-    if command -v zcat > /dev/null 2>&1; then
-        KERNEL_CHECK_FEATURE_CMD="zcat"
-    elif command -v gzip > /dev/null 2>&1; then
-        KERNEL_CHECK_FEATURE_CMD="gzip -dc"
-    fi
-fi
-
-check_kernel_feature() {
-    if [ -n "${KERNEL_CHECK_FEATURE_CMD}" ]; then
-        ${KERNEL_CHECK_FEATURE_CMD} "${KERNEL_CONFIG_FILE}" 2>/dev/null | grep -Eq "^CONFIG_$1=(y|m)$"
-    else
-        return 1
-    fi
-}
-
-get_mountpoint_by_dev() {
-    grep "^$1[[:space:]]" /proc/mounts | head -n1 | cut -d' ' -f2
-}
-
-get_loop_dev_file() {
-    losetup -j "$1" | head -n1 | cut -d: -f1
-}
-
-get_loop_dev() {
-    losetup "$1" | sed 's/^.*(//;s/)$//'
-}
-
-is_mounted() {
-    grep -q " $1 " /proc/mounts
-}
-
-get_coreutils() {
-    if command -v busybox > /dev/null 2>&1; then
-        busybox | head -n 1
-    elif command -v toybox > /dev/null 2>&1; then
-        toybox --version
-    elif command -v toolbox > /dev/null 2>&1; then
-        toolbox --version
-    else
-        echo "Unknown"
-    fi
-}
-
-get_ppid() {
-    local pid=${1:-$PPID}
-    grep -i "PPid:" "/proc/$pid/status" | tr -cd '0-9'
-}
-
-get_process_name() {
-    if [ -f "/proc/${1:-$PPID}/comm" ]; then
-       cat "/proc/${1:-$PPID}/comm"
-    fi
-}
-
-get_term() {
-    term=""
-    # Начинаем с родителя текущего процесса
-    current_pid=$PPID
-    process_name=$(get_process_name $current_pid)
-
-    while [ -z "$term" ]; do
-        case "$process_name" in
-            zsh|bash|su|sh|screen|newgrp|sudo)
-                # Это оболочки, поднимаемся выше
-                current_pid=$(get_ppid $current_pid)
-                process_name=$(get_process_name $current_pid)
-                
-                if [ "$current_pid" -le 1 ]; then
-                    term="unknown"
-                fi
-            ;;
-            *)
-                term="$process_name"
-            ;;
-        esac
-    done
-    
-    echo "$term"
-}
-
-get_rootfs_name() {
-    local release_file="$1/etc/os-release"
-    local version=""
-
-    if [ -f "$release_file" ]; then
-        version=$(. "$release_file" && echo "$PRETTY_NAME")
-    fi
-
-    if [ -z "$version" ]; then
-        version="Unknown"
-    fi
-
-    echo "$version"
-}
-
-get_rootfs_hostname() {
-    local rootfs="${1}"
-    local hostname_file="${rootfs}/etc/hostname"
-
-    if [ -f "${hostname_file}" ]; then
-        tr -d '[:space:]' < "${hostname_file}"
-    else
-        return 1
-    fi
-}
-
-get_rootfs_hosts() {
-    local rootfs="${1}"
-    local hosts_file="${rootfs}/etc/hosts"
-
-        if [ -f "${hosts_file}" ]; then
-            while IFS= read -r line; do
-                [ -z "${line}" ] && continue
-                
-                case "${line}" in
-                    "#"*) continue ;;
-                esac
-
-                local ip=$(echo "${line}" | awk -F ' ' '{ print $1 }')
-                local host=$(echo "${line}" | awk -F ' ' '{ print $2 }')
-                
-                [ "${ip}" = "127.0.1.1" ] && log_print "i" "Fund hostname: ${host}"
-
-            done < "${hosts_file}"
-        fi
-}
-
-get_cpu() {
-    if [ -f "/proc/cpuinfo" ]; then
-        cpu=$(awk -F '\\s*: | @' \
-            '/model name|Hardware|Processor|^cpu model|chip type|^cpu type/ {
-            cpu=$2; if ($1 == "Hardware") exit } END { print cpu }' "/proc/cpuinfo")
-        [ ! -z "${cpu}" ] && echo "${cpu}"
-        [ -z "${cpu}" ] && echo "Unknown"
-    else
-        echo "Unknown"
-    fi
-}
-
-set_rootfs_hostname() {
-    local rootfs="${1}"
-    local set_hostname="${2}"
-
-    local hostname_file="${rootfs}/etc/hostname"
-    local hosts_file="${rootfs}/etc/hosts"
-
-    local host_exists=false
-
-    if [ -d "${rootfs}/etc" ]; then
-        echo "${set_hostname}" > "${hostname_file}"
-    fi
-
-    if [ -f "${hosts_file}" ]; then
-        while IFS= read -r line; do
-            [ -z "${line}" ] && continue
-            
-            case "${line}" in
-                "#"*) continue ;;
-            esac
-
-            local ip=$(echo "${line}" | awk -F ' ' '{ print $1 }')
-            local host=$(echo "${line}" | awk -F ' ' '{ print $2 }')
-            
-            [ "${host}" = "${set_hostname}" ] && [ "${ip}" = "127.0.1.1" ] && host_exists=true
-
-        done < "${hosts_file}"
-    else
-        # Default hosts file with set hostname
-        cat << EOF > "${hosts_file}"
-127.0.0.1       localhost
-127.0.1.1       ${set_hostname}
-
-# The following lines are desirable for IPv6 capable hosts
-::1             localhost ip6-localhost ip6-loopback
-ff02::1         ip6-allnodes
-ff02::2         ip6-allrouters
-EOF
-    fi
-
-    if [ "${host_exists}" = false ]; then
-        echo "127.0.1.1\t${set_hostname}" >> "${hosts_file}"
-    fi
-}
 
 [ "${USE_LOOP_DEV}" = "true" ] && log_print "i" "Input file: ${ROOTFS_BASE}, size=$(du -sh ${ROOTFS_FULL} | cut -f1)"
 
-if command -v getprop > /dev/null 2>&1; then
-    IS_ANDROID="true"
-    log_print "i" "Device: $(getprop ro.product.model) ($(getprop ro.product.product.device))"
-    log_print "i" "Vendor: $(getprop ro.product.manufacturer)"
-    log_print "i" "Android version: $(getprop ro.vendor.build.version.release)"
+if check_util getprop; then
+	IS_ANDROID="true"
+	log_print "i" "Device: $(getprop ro.product.model) ($(getprop ro.product.product.device))"
+	log_print "i" "Vendor: $(getprop ro.product.manufacturer)"
+	log_print "i" "Android version: $(getprop ro.vendor.build.version.release)"
 else
-    log_print "-" "Possibly running outside Android. Ignoring"
+	log_print "-" "Possibly running outside Android. Ignoring"
 fi
 
 if [ -f "${PWD}/android" ] && [ "${IS_ANDROID}" = "true" ]; then
-    sh "${PWD}/android"
+	sh "${PWD}/android"
 fi
 
-command -v magisk > /dev/null 2>&1 && log_print "i" "Magisk version: $(magisk -v)"
+if check_util magisk; then
+	log_print "i" "Magisk version: $(magisk -v)"
+fi
 
 log_print "i" "Arch: $(uname -m)"
 log_print "i" "CPU: $(get_cpu)"
 log_print "i" "Kernel: $(uname -r)"
 log_print "i" "Utils: $(get_coreutils)"
 log_print "i" "Terminal: $(get_term)"
-log_print "i" "Fetching shell colors"
+log_print "i" "Fetching shell colors $(fetch_shell_colors)"
 
-for i in $(seq 0 15); do
-    [ $i -lt 8 ] && color_code=$((40 + i)) || color_code=$((100 + i - 8))
-    echo -n "\033[${color_code}m   \033[0m"
-    [ $i -eq 7 ] && echo ""
-done
+if [ -f "/boot/config-$(uname -r)" ]; then
+	KERNEL_CHECK_FEATURE_CMD="cat"
+	KERNEL_CONFIG_FILE="/boot/config-$(uname -r)"
+elif [ -f "/proc/config.gz" ]; then
+	KERNEL_CONFIG_FILE="/proc/config.gz"
 
-echo ""
+	if check_util zcat; then
+		KERNEL_CHECK_FEATURE_CMD="zcat"
+	elif check_util gzip; then
+		KERNEL_CHECK_FEATURE_CMD="gzip -dc"
+	fi
+fi
 
-if [ ! -z "${KERNEL_CONFIG_FILE}" ] && [ ! -z "${KERNEL_CHECK_FEATURE_CMD}" ]; then
-    log_print "+" "Checking kernel features (Using: ${KERNEL_CONFIG_FILE})"
+log_print "+" "Checking kernel features (Using: ${KERNEL_CONFIG_FILE})"
 
-    if check_kernel_feature 'NAMESPACES'; then
-        log_print "+" "This kernel uses a namespaces"
-        USE_NS_KERNEL=true
-    else
-        log_print "-" "This kernel not uses a namespaces. Cleanup required"
-    fi
-
-    if ! check_kernel_feature 'BLK_DEV_LOOP'; then
-        log_print "-" "Loopback block devices not supported."
-    else
-        log_print "+" "Loopback block devices supported."
-    fi
-
-    if [ "${IS_ANDROID}" = "true" ]; then
-        if check_kernel_feature 'ANDROID_PARANOID_NETWORK'; then
-            log_print "-" "ANDROID_PARANOID_NETWORK enabled. Network is stuck"
-        else
-            log_print "+" "ANDROID_PARANOID_NETWORK disabled. Network sockets alive"
-        fi
-    fi
-
-    if [ "${IS_ANDROID}" = "true" ]; then
-        if check_kernel_feature 'SECURITY_SELINUX'; then
-            # Fucking SE Linux
-            if command -v getenforce > /dev/null 2>&1; then
-                selinux_state=$(getenforce | tr '[:upper:]' '[:lower:]')
-                log_lvl="+"
-                log_state="All is oaky"
-                color="\033[1;32m"
-                if [ "${selinux_state}" = "enforcing" ]; then
-                    log_lvl="-"
-                    log_state="There may be problems"
-                    color="\033[1;31m"
-                fi
-                log_print "${log_lvl}" "SELinux in ${color}${selinux_state}\033[0m state. ${log_state}"
-            else
-                log_print "-" "getenforce not available. Ignoring"
-            fi
-        fi
-    fi
+if check_kernel_feature 'NAMESPACES'; then
+	log_print "+" "This kernel uses a namespaces"
+	USE_NS_KERNEL=true
 else
-    log_print "-" "Checking kernel features unavailable. Ignoring"
+	log_print "-" "This kernel not uses a namespaces. Cleanup required"
+fi
+
+if ! check_kernel_feature 'BLK_DEV_LOOP'; then
+	log_print "-" "Loopback block devices not supported."
+else
+	log_print "+" "Loopback block devices supported."
+fi
+
+if [ "${IS_ANDROID}" = "true" ]; then
+	if check_kernel_feature 'ANDROID_PARANOID_NETWORK'; then
+		log_print "-" "ANDROID_PARANOID_NETWORK enabled. Network is stuck"
+	else
+		log_print "+" "ANDROID_PARANOID_NETWORK disabled. Network sockets alive"
+	fi
+fi
+
+if [ "${IS_ANDROID}" = "true" ]; then
+	if check_kernel_feature 'SECURITY_SELINUX'; then
+		# Fucking SE Linux
+		if check_util getenforce; then
+			selinux_state=$(getenforce | tr '[:upper:]' '[:lower:]')
+			log_lvl="+"
+			log_state="All is oaky"
+			color="\033[1;32m"
+			if [ "${selinux_state}" = "enforcing" ]; then
+				log_lvl="-"
+				log_state="There may be problems"
+				color="\033[1;31m"
+			fi
+			log_print "${log_lvl}" "SELinux in ${color}${selinux_state}\033[0m state. ${log_state}"
+		else
+			log_print "-" "getenforce not available. Ignoring"
+		fi
+	fi
 fi
 
 if [ "${USE_LOOP_DEV}" = "true" ]; then
-    LOOP_PATH=$(get_loop_dev_file "$ROOTFS_FULL")
-    if [ -z "${LOOP_PATH}" ]; then
-        LOOP_PATH=$(losetup -f --show "${ROOTFS_FULL}")
+	if ! check_util losetup; then
+		log_print "!" "losetup unavilable. Aborted"
+		exit 1
+	fi
 
-        if [ $? -ne 0 ]; then
-            log_print "!" "Failed to create loopback device. Aborted"
-            exit 1
-        fi
-        log_print "+" "Created loopback device: ${LOOP_PATH}"
-    else
-        log_print "+" "Found exists loopback device ${LOOP_PATH}"
-    fi
+	LOOP_PATH=$(get_loop_dev_file "$ROOTFS_FULL")
+	if [ -z "${LOOP_PATH}" ]; then
+		LOOP_PATH=$(losetup -f --show "${ROOTFS_FULL}")
 
-    TARGET_MOUNT="${LOOP_MOUNT_POINT}/${ROOTFS_BASE}"
-    [ ! -d "${TARGET_MOUNT}" ] && mkdir -p "${TARGET_MOUNT}"
-    if [ -d "${TARGET_MOUNT}" ]; then
-        if ! is_mounted "${TARGET_MOUNT}"; then
-            mount "${LOOP_PATH}" "${TARGET_MOUNT}"
-            if is_mounted "${TARGET_MOUNT}"; then
-                log_print "+" "RootFS mounted to: ${TARGET_MOUNT}"
-                log_print "i" "Verison: $(get_rootfs_name ${TARGET_MOUNT})"
-                ROOTFS_PATH="${TARGET_MOUNT}"
-            else
-                log_print "!" "Failed to mount RootFS. Aborted"
-                losetup -d "${LOOP_PATH}"
-                exit 1
-            fi
-        else
-            log_print "-" "Mountpoint ${TARGET_MOUNT} is busy. Fucked strange."
-            BUSY_MNT=$(get_mountpoint_by_dev "${LOOP_PATH}")
-            if [ "${BUSY_MNT}" = "${TARGET_MOUNT}" ]; then
-                ROOTFS_PATH="${TARGET_MOUNT}"
-                log_print "+" "Mountpoint ${TARGET_MOUNT} used by ${LOOP_PATH}, okay"
-            else
-                log_print "!" "Mountpoint ${TARGET_MOUNT} used by ${LOOP_PATH}. Aborted"
-                exit 1
-            fi
-        fi
-    fi
+		if [ $? -ne 0 ]; then
+			log_print "!" "Failed to create loopback device. Aborted"
+			exit 1
+		fi
+		log_print "+" "Created loopback device: ${LOOP_PATH}"
+	else
+		log_print "+" "Found exists loopback device ${LOOP_PATH}"
+	fi
+
+	TARGET_MOUNT="${LOOP_MOUNT_POINT}/${ROOTFS_BASE}"
+	[ ! -d "${TARGET_MOUNT}" ] && mkdir -p "${TARGET_MOUNT}"
+	if [ -d "${TARGET_MOUNT}" ]; then
+		if ! is_mounted "${TARGET_MOUNT}"; then
+			mount "${LOOP_PATH}" "${TARGET_MOUNT}"
+			if is_mounted "${TARGET_MOUNT}"; then
+				log_print "+" "RootFS mounted to: ${TARGET_MOUNT}"
+				log_print "i" "Verison: $(get_rootfs_name ${TARGET_MOUNT})"
+				ROOTFS_PATH="${TARGET_MOUNT}"
+			else
+				log_print "!" "Failed to mount RootFS. Aborted"
+				losetup -d "${LOOP_PATH}"
+				exit 1
+			fi
+		else
+			log_print "-" "Mountpoint ${TARGET_MOUNT} is busy. Fucked strange."
+			BUSY_MNT=$(get_mountpoint_by_dev "${LOOP_PATH}")
+			if [ "${BUSY_MNT}" = "${TARGET_MOUNT}" ]; then
+				ROOTFS_PATH="${TARGET_MOUNT}"
+				log_print "+" "Mountpoint ${TARGET_MOUNT} used by ${LOOP_PATH}, okay"
+			else
+				log_print "!" "Mountpoint ${TARGET_MOUNT} used by ${LOOP_PATH}. Aborted"
+				exit 1
+			fi
+		fi
+	fi
 fi
 
 log_print "+" "Start to mount binded filesystems"
 for BIND_FS in $BIND_FS_PATHS; do
-    [ ! -d "${ROOTFS_PATH}/${BIND_FS}" ] && mkdir -p "${ROOTFS_PATH}/${BIND_FS}"
-    if ! is_mounted "${ROOTFS_PATH}/${BIND_FS}"; then
-        mount --bind "/${BIND_FS}" "${ROOTFS_PATH}/${BIND_FS}"
-        if is_mounted "${ROOTFS_PATH}/${BIND_FS}"; then
-            echo "    [${BIND_FS}]"
-        fi
-    else
-        log_print "-" "${BIND_FS} was mounted before. Fucking strange. Skipping"
-    fi
+	[ ! -d "${ROOTFS_PATH}/${BIND_FS}" ] && mkdir -p "${ROOTFS_PATH}/${BIND_FS}"
+	if ! is_mounted "${ROOTFS_PATH}/${BIND_FS}"; then
+		mount --bind "/${BIND_FS}" "${ROOTFS_PATH}/${BIND_FS}"
+		if is_mounted "${ROOTFS_PATH}/${BIND_FS}"; then
+			echo "    [${BIND_FS}]"
+		fi
+	else
+		log_print "-" "${BIND_FS} was mounted before. Fucking strange. Skipping"
+	fi
 done
 
 # Прячем биндеры от греха подальше
 if [ "${IS_ANDROID}" = "true" ]; then
-    log_print "+" "Masking HAL binders"
-    for HAL_BINDER in $HAL_BINDERS; do
-        if [ -e "/dev/${HAL_BINDER}" ]; then 
-            mount -t tmpfs tmpfs -o mode=000 ${ROOTFS_PATH}/dev/${HAL_BINDER} 2>/dev/null
-            echo "    [${HAL_BINDER}]"
-        else
-            log_print "-" "HAL Binder '${HAL_BINDER}' not found, ignoring"
-        fi
-    done
+	log_print "i" "Masking HAL binders"
+	for HAL_BINDER in $HAL_BINDERS; do
+		if [ -e "/dev/${HAL_BINDER}" ]; then
+			mount -t tmpfs tmpfs -o mode=000 ${ROOTFS_PATH}/dev/${HAL_BINDER} 2>/dev/null
+			echo "    [${HAL_BINDER}]"
+		else
+			log_print "-" "HAL Binder '${HAL_BINDER}' not found, ignoring"
+		fi
+	done
 fi
 
 # tmpfs
 if ! is_mounted "${ROOTFS_PATH}/tmp"; then
-    mount -t tmpfs -o size="${TMPFS_SIZE}" tmpfs "${ROOTFS_PATH}/tmp"
-    if is_mounted "${ROOTFS_PATH}/tmp"; then
-        log_print "+" "Mounted tmpfs at ${ROOTFS_PATH}/tmp (size=${TMPFS_SIZE})"
-    fi
+	mount -t tmpfs -o size="${TMPFS_SIZE}" tmpfs "${ROOTFS_PATH}/tmp"
+	if is_mounted "${ROOTFS_PATH}/tmp"; then
+		log_print "+" "Mounted tmpfs at ${ROOTFS_PATH}/tmp (size=${TMPFS_SIZE})"
+	fi
 else
-    log_print "-" "${ROOTFS_PATH}/tmp was mounted before. Fucking strange. Skipping"
+	log_print "-" "${ROOTFS_PATH}/tmp was mounted before. Fucking strange. Skipping"
 fi
+
+
+# НАХУЙ!!!! ЛОМАЕТ ВСЕ!!!
+# Checking internal storage
+#if [ -d /storage/emulated ]; then
+#	if [ ! -d "${ROOTFS_PATH}/mnt/emulated" ]; then
+#		mkdir "${ROOTFS_PATH}/mnt/emulated"
+#	fi
+#	mount -o bind /storage/emulated "${ROOTFS_PATH}/mnt/emulated"
+#fi
 
 # Checking external SD Card partitions
 if [ -d "/storage" ]; then
-    for dir in /storage/*; do
-        base=$(basename "${dir}")
-        if [ "${base}" != "emulated" ] && [ "${base}" != "self" ]; then
-            if [ -d "${dir}" ]; then
-                mkdir -p "${ROOTFS_PATH}/mnt/${base}"
-                if ! is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
-                    mount -o bind "${dir}" "${ROOTFS_PATH}/mnt/${base}"
-                    if is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
-                        EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${ROOTFS_PATH}/mnt/${base}"
-                        log_print "+" "Found external storage at ${dir}, mounted to /mnt/${base}"
-                    fi
-                else
-                    log_print "-" "${dir} was mounted before. Fucking strange."
-                fi
-            fi
-        fi
-    done
+	for dir in /storage/*; do
+		base=$(basename "${dir}")
+		if [ "${base}" != "emulated" ] && [ "${base}" != "self" ]; then
+			if [ -d "${dir}" ]; then
+				mkdir -p "${ROOTFS_PATH}/mnt/${base}"
+				if ! is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
+					mount -o bind "${dir}" "${ROOTFS_PATH}/mnt/${base}"
+					if is_mounted "${ROOTFS_PATH}/mnt/${base}"; then
+						EXTERNAL_STORAGE_PARTS="${EXTERNAL_STORAGE_PARTS}${ROOTFS_PATH}/mnt/${base}"
+						log_print "+" "Found external storage at ${dir}, mounted to /mnt/${base}"
+					fi
+				else
+					log_print "-" "${dir} was mounted before. Fucking strange."
+				fi
+			fi
+		fi
+	done
 fi
 
+log_print "+" "Found hosts in this rootfs"
 get_rootfs_hosts "${ROOTFS_PATH}"
 
 if GET_HOSTNAME=$(get_rootfs_hostname "${ROOTFS_PATH}" 2>/dev/null); then
-    DEF_HOST="${GET_HOSTNAME}"
+	DEF_HOST="${GET_HOSTNAME}"
 fi
 
 trap cleanup INT TERM HUP EXIT
 
 log_print "?" "Enter hostname (default: ${DEF_HOST}): " true
 while true; do
-    read -r HOSTNAME
+	read -r HOSTNAME
 
-    if [ ! -z "${HOSTNAME}" ]; then
-        export HOST="${HOSTNAME}"
-        break
-    else
-        HOSTNAME="${DEF_HOST}"
-        export HOST="${HOSTNAME}"
-        break
-    fi
+	if [ ! -z "${HOSTNAME}" ]; then
+		export HOST="${HOSTNAME}"
+		break
+	else
+		HOSTNAME="${DEF_HOST}"
+		export HOST="${HOSTNAME}"
+		break
+	fi
 done
 
 set_rootfs_hostname "${ROOTFS_PATH}" "${HOSTNAME}"
 log_print "+" "Hostname set to: ${HOSTNAME}"
 
 cleanup() {
-    trap - EXIT INT TERM HUP
+	trap - EXIT INT TERM HUP
 
-    log_print "i" "Cleaning chroot rootfs temporary files"
-    for pattern in ${CLEANUP_DIRS}; do
-        for user_dir in "${ROOTFS_PATH}/"${pattern}; do
-            [ ! -d "${user_dir}" ] && continue
+	log_print "i" "Cleaning chroot rootfs temporary files"
+	for pattern in ${CLEANUP_DIRS}; do
+		for user_dir in "${ROOTFS_PATH}/"${pattern}; do
+			[ ! -d "${user_dir}" ] && continue
 
-            [ "${DEBUG}" = "true" ] && log_print "D" "Found dir: ${user_dir}"
+			[ "${DEBUG}" = "true" ] && log_print "D" "Found dir: ${user_dir}"
 
-            for rm_dir in ${DIRS_TO_REMOVE}; do
-                if [ -d "${user_dir}/${rm_dir}" ]; then
-                rm -rf "${user_dir}/${rm_dir}"
-                    [ ! -d "${user_dir}/${rm_dir}" ] && log_print "+" "Removed ${user_dir}/${rm_dir}"
-                    [ -d "${user_dir}/${rm_dir}" ] && log_print "-" "${user_dir}/${rm_dir} not removed. WTF???"
-                fi
-            done
+			for rm_dir in ${DIRS_TO_REMOVE}; do
+				if [ -d "${user_dir}/${rm_dir}" ]; then
+				rm -rf "${user_dir}/${rm_dir}"
+					[ ! -d "${user_dir}/${rm_dir}" ] && log_print "+" "Removed ${user_dir}/${rm_dir}"
+					[ -d "${user_dir}/${rm_dir}" ] && log_print "W" "${user_dir}/${rm_dir} not removed. WTF???"
+				fi
+			done
 
-            for file_pattern in ${FILES_TO_REMOVE}; do
-                for target in "${user_dir}"/${file_pattern}*; do
-                    
-                    if [ -f "${target}" ]; then
-                        rm -f "${target}"
-                        [ ! -f "${target}" ] && log_print "+" "Removed ${target}"
-                        [ -f "${target}" ] && log_print "-" "${target} not removed. WTF???"
-                    fi
-                    
-                done
-            done
-        done
-    done
-    
-    log_print "i" "killing all chroot tails (running lsof)"
-    #pids=$(lsof | grep "${ROOTFS_PATH}" | awk '{ print $2 }' | sort -u) # THIS IS A FUCKED CONTRUCTION
-    pids=$(lsof -t +D "${ROOTFS_PATH}")
+			for file_pattern in ${FILES_TO_REMOVE}; do
+				for target in "${user_dir}"/${file_pattern}*; do
+					
+					if [ -f "${target}" ]; then
+						rm -f "${target}"
+						[ ! -f "${target}" ] && log_print "+" "Removed ${target}"
+						[ -f "${target}" ] && log_print "W" "${target} not removed. WTF???"
+					fi
+					
+				done
+			done
+		done
+	done
+	
+	log_print "i" "killing all chroot tails (running lsof)"
+	#pids=$(lsof | grep "${ROOTFS_PATH}" | awk '{ print $2 }' | sort -u) # THIS IS A FUCKED CONTRUCTION
+	pids=$(lsof -t +D "${ROOTFS_PATH}")
 
-    if [ -n "${pids}" ]; then
-        log_print "i" "Killing pids: (${pids})"
-        #kill -9 ${pids} 2>/dev/null # THIS IS A VERY FUCKED FRAGILE CONTRUCTION
-        echo "${pids}" | xargs kill -9 2>/dev/null
+	if [ -n "${pids}" ]; then
+		log_print "i" "Killing pids: (${pids})"
+		#kill -9 ${pids} 2>/dev/null # THIS IS A VERY FUCKED FRAGILE CONTRUCTION
+		echo "${pids}" | xargs kill -9 2>/dev/null
 
-        sleep 1
-        log_print "+" "Done"
-    fi
+		sleep 1
+		log_print "+" "Done"
+	fi
 
-    echo "$EXTERNAL_STORAGE_PARTS" | while IFS= read -r m; do
-        [ -z "$m" ] && continue
-        if [ -d "$m" ]; then
-            log_print "+" "Cleanup ${m}"
-            umount "$m"
-            if ! is_mounted "$m"; then
-                rm -rf "$m"
-            fi
-        else
-            log_print "-" "Directory ${m} does not exists. WTF??!"
-        fi
-    done
+	echo "$EXTERNAL_STORAGE_PARTS" | while IFS= read -r m; do
+		[ -z "$m" ] && continue
+		if [ -d "$m" ]; then
+			log_print "+" "Cleanup ${m}"
+			umount "$m"
+			if ! is_mounted "$m"; then
+				rm -rf "$m"
+			fi
+		else
+			log_print "W" "Directory ${m} does not exists. WTF??!"
+		fi
+	done
 
-    for umnt_path in $CLEANUP_BINDERS; do
-        if [ -d "${ROOTFS_PATH}/${umnt_path}" ]; then
-            umount -l "${ROOTFS_PATH}/${umnt_path}"
-            if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
-                log_print "+" "Cleanup ${ROOTFS_PATH}/${umnt_path}"
-            else
-                log_print "!" "Error umounting: ${umnt_path}"
-            fi
-        else
-            log_print "-" "Directory ${ROOTFS_PATH}/${umnt_path} does not exists. WTF??!"
-        fi
-    done
+	for umnt_path in $CLEANUP_BINDERS; do
+		if [ -d "${ROOTFS_PATH}/${umnt_path}" ]; then
+			umount -l "${ROOTFS_PATH}/${umnt_path}"
+			if ! is_mounted "${ROOTFS_PATH}/${umnt_path}"; then
+				log_print "+" "Cleanup ${ROOTFS_PATH}/${umnt_path}"
+			else
+				log_print "!" "Error umounting: ${umnt_path}"
+			fi
+		else
+			log_print "W" "Directory ${ROOTFS_PATH}/${umnt_path} does not exists. WTF??!"
+		fi
+	done
 
-    if [ "${USE_LOOP_DEV}" = "true" ]; then
-        if [ -d "${ROOTFS_PATH}" ]; then
-            umount -l "${ROOTFS_PATH}"
-            if ! is_mounted "${ROOTFS_PATH}"; then
-                rm -rf "${ROOTFS_PATH}"
-                if [ ! -d  "${ROOTFS_PATH}" ]; then
-                    log_print "+" "Cleanup ${ROOTFS_PATH}"
-                else
-                    log_print "!" "RootFS cleanup error"
-                fi
-            else
-                log_print "!" "Error unmount RootFS"
-            fi
-        else
-            log_print "-" "Directory ${ROOTFS_PATH} does not exist. WTF??!"
-        fi
+	if [ "${USE_LOOP_DEV}" = "true" ]; then
+		if [ -d "${ROOTFS_PATH}" ]; then
+			umount -l "${ROOTFS_PATH}"
+			if ! is_mounted "${ROOTFS_PATH}"; then
+				rm -rf "${ROOTFS_PATH}"
+				if [ ! -d  "${ROOTFS_PATH}" ]; then
+					log_print "+" "Cleanup ${ROOTFS_PATH}"
+				else
+					log_print "!" "RootFS cleanup error"
+				fi
+			else
+				log_print "!" "Error unmount RootFS"
+			fi
+		else
+			log_print "W" "Directory ${ROOTFS_PATH} does not exist. WTF??!"
+		fi
 
-        sleep 1
+		sleep 1
 
-        log_print "+" "Removing loopback device (${LOOP_PATH})"
-        if [ -b "${LOOP_PATH}" ]; then
-            losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "-" "The loopback device is busy or removed before, may be cleared on reboot. Strange"
-        fi
-    fi
+		log_print "+" "Removing loopback device (${LOOP_PATH})"
+		if [ -b "${LOOP_PATH}" ]; then
+			losetup -d "${LOOP_PATH}" 2>/dev/null || log_print "-" "The loopback device is busy or removed before, may be cleared on reboot. Strange"
+		fi
+	fi
 
-    log_print "+" "Syncing"
-    sync
+	log_print "+" "Syncing"
+	sync
 
-    log_print "+" "Done"
-    printf "Return to shell\n\n\n"
+	log_print "+" "Done"
+	printf "Return to shell\n\n\n"
 
-    exit 0
+	exit 0
 }
 
 
 log_print "@" "Select shell to use"
 for user in $(grep -Ff "${ROOTFS_PATH}/etc/shells" "${ROOTFS_PATH}/etc/passwd" | cut -d: -f1); do
-    USERS_COUNT=$((USERS_COUNT + 1))
-    echo "    ${USERS_COUNT}. ${user}"
+	USERS_COUNT=$((USERS_COUNT + 1))
+	echo "    ${USERS_COUNT}. ${user}"
 
-    FOUND_USERS="$FOUND_USERS $user"
+	FOUND_USERS="$FOUND_USERS $user"
 done
 
 if [ "$USERS_COUNT" -eq 0 ]; then
-    log_print "!" "No users found! Trying root anyway..."
-    SELECTED_USER="root"
+	log_print "!" "No users found! Trying root anyway..."
+	SELECTED_USER="root"
 elif [ "$SHELL_COUNT" -eq 1 ]; then
-    SELECTED_USER=$(echo "$FOUND_USERS" | xargs)
+	SELECTED_USER=$(echo "$FOUND_USERS" | xargs)
 else   
-    while true; do
-        log_print "?" "Choice (1-$USERS_COUNT): " true
-        read -r CHOICE
-        
-        case "$CHOICE" in
-            *[!0-9]* | "")
-                continue
-                ;;
-        esac
+	while true; do
+		log_print "?" "Choice (1-$USERS_COUNT): " true
+		read -r CHOICE
+		
+		case "$CHOICE" in
+			*[!0-9]* | "")
+				continue
+				;;
+		esac
 
-        SELECTED_USER=$(echo "$FOUND_USERS" | cut -d' ' -f"$((CHOICE + 1))")
+		SELECTED_USER=$(echo "$FOUND_USERS" | cut -d' ' -f"$((CHOICE + 1))")
 
-        if [ ! -z "$SELECTED_USER" ]; then
-           #log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL"
-           break
-        fi
-    done
+		if [ ! -z "$SELECTED_USER" ]; then
+		   #log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL"
+		   break
+		fi
+	done
 fi
 
 log_print "@" "Select shell to use"
 for shell in $SHELLS; do
-    if [ -x "${ROOTFS_PATH}/bin/$shell" ]; then
-        SHELL_PATH="/bin/$shell"
-    elif [ -x "${ROOTFS_PATH}/usr/bin/$shell" ]; then
-        SHELL_PATH="/usr/bin/$shell"
-    else
-        continue
-    fi
-    
-    SHELL_COUNT=$((SHELL_COUNT + 1))
-    if echo "$SHELL_PATH" | grep -q "su"; then
-        echo "    ${SHELL_COUNT}. \033[1;31m$SHELL_PATH\033[0m [ROOT]"
-    else
-        echo "    ${SHELL_COUNT}. $SHELL_PATH"
-    fi
-    FOUND_SHELLS="$FOUND_SHELLS $SHELL_PATH"
+	if [ -x "${ROOTFS_PATH}/bin/$shell" ]; then
+		SHELL_PATH="/bin/$shell"
+	elif [ -x "${ROOTFS_PATH}/usr/bin/$shell" ]; then
+		SHELL_PATH="/usr/bin/$shell"
+	else
+		continue
+	fi
+	
+	SHELL_COUNT=$((SHELL_COUNT + 1))
+	if echo "$SHELL_PATH" | grep -q "su"; then
+		echo "    ${SHELL_COUNT}. \033[1;31m$SHELL_PATH\033[0m [ROOT]"
+	else
+		echo "    ${SHELL_COUNT}. $SHELL_PATH"
+	fi
+	FOUND_SHELLS="$FOUND_SHELLS $SHELL_PATH"
 done
 
 if [ "$SHELL_COUNT" -eq 0 ]; then
-    log_print "!" "No shells found! Trying /bin/sh anyway..."
-    SELECTED_SHELL="/bin/sh"
+	log_print "!" "No shells found! Trying /bin/sh anyway..."
+	SELECTED_SHELL="/bin/sh"
 elif [ "$SHELL_COUNT" -eq 1 ]; then
-    SELECTED_SHELL=$(echo "$FOUND_SHELLS" | xargs)
+	SELECTED_SHELL=$(echo "$FOUND_SHELLS" | xargs)
 else   
-    while true; do
-        log_print "?" "Choice (1-$SHELL_COUNT): " true
-        read -r CHOICE
-        
-        case "$CHOICE" in
-            *[!0-9]* | "")
-                continue
-                ;;
-        esac
-        
-        SELECTED_SHELL=$(echo "$FOUND_SHELLS" | cut -d' ' -f"$((CHOICE + 1))")
-        
-        if [ ! -z "$SELECTED_SHELL" ] && [ -f "${ROOTFS_PATH}/${SELECTED_SHELL}" ]; then
-           log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL as ${SELECTED_USER}"
-           break
-        fi
-    done
-    
-    if [ ! -z "$SELECTED_SHELL" ] && [ -x "${ROOTFS_PATH}/${SELECTED_SHELL}" ]; then
-        chroot "${ROOTFS_PATH}" runuser -u "$SELECTED_USER" -- "$SELECTED_SHELL"
-    else
-        log_print "!" "Failed to find shell. Aborted"
-        exit 1
-    fi
+	while true; do
+		log_print "?" "Choice (1-$SHELL_COUNT): " true
+		read -r CHOICE
+		
+		case "$CHOICE" in
+			*[!0-9]* | "")
+				continue
+				;;
+		esac
+		
+		SELECTED_SHELL=$(echo "$FOUND_SHELLS" | cut -d' ' -f"$((CHOICE + 1))")
+		
+		if [ ! -z "$SELECTED_SHELL" ] && [ -f "${ROOTFS_PATH}/${SELECTED_SHELL}" ]; then
+		   log_print "*" "Entering into chroot ${ROOTFS_PATH} with $SELECTED_SHELL as ${SELECTED_USER}"
+		   break
+		fi
+	done
+	
+	if [ ! -z "$SELECTED_SHELL" ] && [ -x "${ROOTFS_PATH}/${SELECTED_SHELL}" ]; then
+		chroot "${ROOTFS_PATH}" runuser -u "$SELECTED_USER" -- "$SELECTED_SHELL"
+	else
+		log_print "!" "Failed to find shell. Aborted"
+		exit 1
+	fi
 fi
